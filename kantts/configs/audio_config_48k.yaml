@@ -1,0 +1,27 @@
+# Audio processing configs
+
+audio_config:
+  # Preprocess
+  wav_normalize: True
+  trim_silence: True
+  trim_silence_threshold_db: 60
+  preemphasize: False
+
+  # Feature extraction
+  sampling_rate: 48000
+  hop_length: 600
+  win_length: 2400
+  n_fft: 4096
+  n_mels: 128
+  fmin: 0.0
+  fmax: 12000.0
+  phone_level_feature: True
+
+  # Normalization
+  norm_type: "mean_std"  # "mean_std" or "global"
+  max_norm: 1.0
+  symmetric: False
+  min_level_db: -100.0
+  ref_level_db: 20
+  
+  num_workers: 16
