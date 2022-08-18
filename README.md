@@ -1,7 +1,6 @@
-# Mit-TTS Openpipeline 
+# KAN-TTS
 
-You can train your own TTS model from zero to hero :).
-
+With KAN-TTS you can train your own TTS model from zero to hero :).
 
 ## Models 
 Temporarily we support sam-bert and hifi-GAN, other models are coming soon.
