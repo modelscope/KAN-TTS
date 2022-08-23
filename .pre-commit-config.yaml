@@ -1,0 +1,11 @@
+repos:
+-   repo: https://github.com/ambv/black
+    rev: 20.8b1
+    hooks:
+    - id: black
+      additional_dependencies: ['click==8.0.4']
+-   repo: https://gitlab.com/pycqa/flake8
+    rev: 3.8.4
+    hooks:
+    - id: flake8
+      args: ['--max-line-length=120', '--extend-ignore=E203']
