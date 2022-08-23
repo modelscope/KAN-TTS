@@ -13,6 +13,7 @@ try:
     from kantts.preprocess.script_convertor.TextScriptConvertor import (
         TextScriptConvertor,
     )
+    from kantts.datasets.dataset import AM_Dataset, Voc_Dataset
     from kantts.utils.log import logging_to_file, get_git_revision_hash
 except ImportError:
     raise ImportError("Please install kantts.")
@@ -33,6 +34,27 @@ languages = {
         "s2p_map_path": "py2phoneMap.txt",
     }
 }
+
+
+def gen_metafile(
+    voice_output_dir,
+    split_ratio=0.98,
+):
+
+    voc_train_meta = os.path.join(voice_output_dir, "train.lst")
+    voc_valid_meta = os.path.join(voice_output_dir, "valid.lst")
+    if not os.path.exists(voc_train_meta) or not os.path.exists(voc_valid_meta):
+        Voc_Dataset.gen_metafile(
+            os.path.join(voice_output_dir, "wav"), voice_output_dir, split_ratio
+        )
+        logging.info("Voc metafile generated.")
+
+    raw_metafile = os.path.join(voice_output_dir, "raw_metafile.txt")
+    am_train_meta = os.path.join(voice_output_dir, "am_train.lst")
+    am_valid_meta = os.path.join(voice_output_dir, "am_valid.lst")
+    if not os.path.exists(am_train_meta) or not os.path.exists(am_valid_meta):
+        AM_Dataset.gen_metafile(raw_metafile, voice_output_dir, split_ratio)
+        logging.info("AM metafile generated.")
 
 
 #  TODO: Zh-CN as default
@@ -108,6 +130,10 @@ def process_mit_style_data(
     )
 
     logging.info("Processing done.")
+
+    # Generate Voc&AM metafile
+    # TODO: train/valid ratio setting
+    gen_metafile(voice_output_dir)
 
 
 if __name__ == "__main__":
