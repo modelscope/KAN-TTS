@@ -166,7 +166,7 @@ def train(
 
     if resume_path is not None:
         trainer.load_checkpoint(resume_path, True)
-        logging.info(f"Successfully resumed from {args.resume}.")
+        logging.info(f"Successfully resumed from {resume_path}.")
 
     try:
         trainer.train()
