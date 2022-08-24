@@ -5,8 +5,13 @@ import subprocess
 def logging_to_file(log_file):
     logger = logging.getLogger()
     handler = logging.FileHandler(log_file)
+    formatter = logging.Formatter(
+        "%(asctime)s %(levelname)-4s [%(filename)s:%(lineno)d] %(message)s",
+        datefmt="%Y-%m-%d:%H:%M:%S",
+    )
+    handler.setFormatter(formatter)
     logger.addHandler(handler)
-    logger.setLevel(logging.INFO)
+    logger.setLevel(logging.DEBUG)
 
 
 def get_git_revision_short_hash():

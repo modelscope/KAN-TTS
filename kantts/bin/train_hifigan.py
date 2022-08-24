@@ -41,6 +41,7 @@ def train(
 ):
     if not torch.cuda.is_available():
         device = torch.device("cpu")
+        distributed = False
     else:
         torch.backends.cudnn.benchmark = True
         logging.info("Args local rank: {}".format(local_rank))
@@ -168,11 +169,12 @@ def train(
 
     if resume_path is not None:
         trainer.load_checkpoint(resume_path)
-        logging.info(f"Successfully resumed from {args.resume}.")
+        logging.info(f"Successfully resumed from {resume_path}.")
 
     try:
         trainer.train()
-    except KeyboardInterrupt:
+    except (Exception, KeyboardInterrupt) as e:
+        logging.error(e, exc_info=True)
         trainer.save_checkpoint(
             os.path.join(
                 os.path.join(stage_dir, "ckpt"), f"checkpoint-{trainer.steps}.pth"

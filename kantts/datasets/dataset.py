@@ -6,6 +6,7 @@ from multiprocessing import Manager
 import librosa
 import numpy as np
 import random
+from tqdm import tqdm
 from kantts.utils.ling_unit.ling_unit import KanTtsLinguisticUnit
 
 
@@ -148,7 +149,8 @@ class Voc_Dataset(torch.utils.data.Dataset):
         if not os.path.exists(wav_dir) or not os.path.exists(mel_dir):
             raise ValueError("wav or mel directory not found")
         items = []
-        for name in lines:
+        logging.info("Loading metafile...")
+        for name in tqdm(lines):
             name = name.strip()
             mel_file = os.path.join(mel_dir, name + ".npy")
             wav_file = os.path.join(wav_dir, name + ".wav")
@@ -360,7 +362,8 @@ class AM_Dataset(torch.utils.data.Dataset):
         energy_dir = os.path.join(data_dir, "energy")
 
         items = []
-        for line in lines:
+        logging.info("Loading metafile...")
+        for line in tqdm(lines):
             line = line.strip()
             index, ling_txt = line.split("\t")
             mel_file = os.path.join(mel_dir, index + ".npy")
