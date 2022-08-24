@@ -41,6 +41,7 @@ def train(
 ):
     if not torch.cuda.is_available():
         device = torch.device("cpu")
+        distributed = False
     else:
         torch.backends.cudnn.benchmark = True
         logging.info("Args local rank: {}".format(local_rank))
@@ -170,7 +171,8 @@ def train(
 
     try:
         trainer.train()
-    except KeyboardInterrupt:
+    except (Exception, KeyboardInterrupt) as e:
+        logging.error(e, exc_info=True)
         trainer.save_checkpoint(
             os.path.join(
                 os.path.join(stage_dir, "ckpt"), f"checkpoint-{trainer.steps}.pth"
