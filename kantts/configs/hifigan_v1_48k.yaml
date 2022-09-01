@@ -130,14 +130,14 @@ Loss:
   mel_loss:
     enable: True
     params:
-      fs: 24000
-      fft_size: 1024
-      hop_size: 240
-      win_length: 1024
+      fs: 48000
+      fft_size: 4096
+      hop_size: 600
+      win_length: 2400
       window: "hann"
-      num_mels: 80
+      num_mels: 128
       fmin: 0
-      fmax: 8000
+      fmax: 12000
       log_base: null
     weights: 45.0
 

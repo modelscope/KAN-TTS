@@ -130,10 +130,10 @@ Loss:
   mel_loss:
     enable: True
     params:
-      fs: 24000
-      fft_size: 1024
-      hop_size: 240
-      win_length: 1024
+      fs: 16000
+      fft_size: 2048
+      hop_size: 200
+      win_length: 1000
       window: "hann"
       num_mels: 80
       fmin: 0
