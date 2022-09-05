@@ -11,7 +11,7 @@ def logging_to_file(log_file):
     )
     handler.setFormatter(formatter)
     logger.addHandler(handler)
-    logger.setLevel(logging.DEBUG)
+    logger.setLevel(logging.INFO)
 
 
 def get_git_revision_short_hash():

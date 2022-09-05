@@ -262,8 +262,9 @@ class TextScriptConvertor:
                         wordIndex += 1
                         pronIndex += 1
                     else:
-                        #  FIXME(Jin): Why the index is 1 to charCount, shouldn't it be 0 to charCount?
-                        for i in range(1, charCount):
+                        #  FIXME(Jin): Just skip the first char then match the rest char.
+                        i = 1
+                        while i >= 1 and i < charCount:
                             pronIndex += 1
                             if pronIndex < len(wordProns):
                                 pron = wordProns[pronIndex].strip()
@@ -300,6 +301,7 @@ class TextScriptConvertor:
                                     pron,
                                 )
                                 return False
+                            i += 1
                         spoken_sentence.m_spoken_word_list[
                             wordIndex
                         ].m_syllable_list.extend(syllable_list)
