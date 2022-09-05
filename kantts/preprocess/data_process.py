@@ -21,7 +21,7 @@ except ImportError:
 logging.basicConfig(
     format="%(asctime)s,%(msecs)d %(levelname)-8s [%(filename)s:%(lineno)d] %(message)s",
     datefmt="%Y-%m-%d:%H:%M:%S",
-    level=logging.DEBUG,
+    level=logging.INFO,
 )
 
 LANGUAGES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "languages")

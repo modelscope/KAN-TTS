@@ -23,7 +23,7 @@ logging.basicConfig(
     #  filename=os.path.join(stage_dir, 'stdout.log'),
     format="%(asctime)s, %(levelname)-4s [%(filename)s:%(lineno)d] %(message)s",
     datefmt="%Y-%m-%d:%H:%M:%S",
-    level=logging.DEBUG,
+    level=logging.INFO,
 )
 
 
