@@ -102,7 +102,10 @@ def hifigan_infer(audio_config, model_config, ckpt_path, input_mel, output_dir):
         # (T, C) -> (B, C, T)
         mel_data = mel_data.transpose(1, 0).unsqueeze(0)
         start = time.time()
-        y = model(mel_data).view(-1).cpu().numpy()
+        y = model(mel_data)
+        if hasattr(model, "pqmf"):
+            y = model.pqmf.synthesis(y)
+        y = y.view(-1).cpu().numpy()
         rtf = (time.time() - start) / (len(y) / config["audio_config"]["sampling_rate"])
 
         # save as PCM 16 bit wav file
