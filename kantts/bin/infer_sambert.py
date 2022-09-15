@@ -76,7 +76,23 @@ def am_synthesis(symbol_seq, fsnet, ling_unit, device):
     )
 
 
-def am_inference(a, config, device):
+def am_infer(sentence, ckpt, output_dir, config=None):
+    if not torch.cuda.is_available():
+        device = torch.device("cpu")
+    else:
+        torch.backends.cudnn.benchmark = True
+        device = torch.device("cuda", 0)
+
+    if config is not None:
+        with open(config, "r") as f:
+            config = yaml.load(f, Loader=yaml.Loader)
+    else:
+        am_config_file = os.path.join(
+            os.path.dirname(os.path.dirname(ckpt)), "config.yaml"
+        )
+        with open(am_config_file, "r") as f:
+            config = yaml.load(f, Loader=yaml.Loader)
+
     ling_unit = KanTtsLinguisticUnit(config)
     ling_unit_size = ling_unit.get_unit_size()
     config["Model"]["KanTtsSAMBERT"]["params"].update(ling_unit_size)
@@ -85,16 +101,16 @@ def am_inference(a, config, device):
 
     fsnet = model["KanTtsSAMBERT"]
 
-    logging.info("Loading checkpoint: {}".format(a.ckpt))
-    state_dict = torch.load(a.ckpt)
+    logging.info("Loading checkpoint: {}".format(ckpt))
+    state_dict = torch.load(ckpt)
 
     fsnet.load_state_dict(state_dict["model"], strict=False)
 
-    results_dir = os.path.join(a.output_dir, "feat")
+    results_dir = os.path.join(output_dir, "feat")
     os.makedirs(results_dir, exist_ok=True)
     fsnet.eval()
 
-    with open(a.sentence, encoding="utf-8") as f:
+    with open(sentence, encoding="utf-8") as f:
         for line in f:
             line = line.strip().split("\t")
             logging.info("Inference sentence: {}".format(line[0]))
@@ -121,17 +137,4 @@ if __name__ == "__main__":
     parser.add_argument("--ckpt", type=str, required=True)
     args = parser.parse_args()
 
-    # AM
-    am_config_file = os.path.join(
-        os.path.dirname(os.path.dirname(args.ckpt)), "config.yaml"
-    )
-
-    with open(am_config_file, "r") as f:
-        config = yaml.load(f, Loader=yaml.Loader)
-
-    if torch.cuda.is_available():
-        device = torch.device("cuda", 0)
-    else:
-        device = torch.device("cpu")
-
-    am_inference(args, config, device)
+    am_infer(args.sentence, args.ckpt, args.output_dir)
