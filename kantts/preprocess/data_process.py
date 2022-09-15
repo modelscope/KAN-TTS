@@ -70,9 +70,6 @@ def process_mit_style_data(
     #  TODO: check if the vocie is supported
     emo_tag_path = None
 
-    os.makedirs(voice_output_dir, exist_ok=True)
-    logging_to_file(os.path.join(voice_output_dir, "data_process_stdout.log"))
-
     phoneset_path = os.path.join(
         LANGUAGES_DIR, targetLang, languages[targetLang]["phoneset_path"]
     )
@@ -147,10 +144,16 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    process_mit_style_data(
-        args.voice_input_dir,
-        args.voice_output_dir,
-        args.audio_config,
-        args.speaker,
-        args.skip_script,
-    )
+    os.makedirs(args.voice_output_dir, exist_ok=True)
+    logging_to_file(os.path.join(args.voice_output_dir, "data_process_stdout.log"))
+
+    try:
+        process_mit_style_data(
+            args.voice_input_dir,
+            args.voice_output_dir,
+            args.audio_config,
+            args.speaker,
+            args.skip_script,
+        )
+    except (Exception, KeyboardInterrupt) as e:
+        logging.error(e, exc_info=True)
