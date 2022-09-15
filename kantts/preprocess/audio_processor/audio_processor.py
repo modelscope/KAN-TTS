@@ -274,14 +274,17 @@ class AudioProcessor:
                     future = executor.submit(
                         trim_silence_with_interval,
                         pcm_data,
-                        self.dur_dict[wav_basename],
+                        self.dur_dict.get(wav_basename, None),
                         self.hop_length,
                     )
                     future.add_done_callback(lambda p: progress.update())
                     futures.append((future, wav_basename))
             # TODO: multi-processing
             for future, wav_basename in tqdm(futures):
-                self.trim_pcm_dict[wav_basename] = future.result()
+                trimed_pcm = future.result()
+                if trimed_pcm is None:
+                    continue
+                self.trim_pcm_dict[wav_basename] = trimed_pcm
                 save_wav(
                     self.trim_pcm_dict[wav_basename],
                     os.path.join(out_wav_dir, wav_basename + ".wav"),

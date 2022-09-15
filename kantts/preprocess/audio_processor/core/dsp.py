@@ -43,6 +43,8 @@ def trim_silence(wav, top_db, hop_length, win_length):
 
 
 def trim_silence_with_interval(wav, interval, hop_length):
+    if interval is None:
+        return None
     leading_sil = interval[0]
     tailing_sil = interval[-1]
     trim_wav = wav[leading_sil * hop_length : -tailing_sil * hop_length]
