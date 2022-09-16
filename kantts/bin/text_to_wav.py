@@ -2,6 +2,7 @@ import os
 import sys
 import argparse
 import ttsfrd
+import yaml
 import logging
 import zipfile
 
@@ -23,7 +24,7 @@ logging.basicConfig(
 
 
 #  TODO: default Zh-CN
-def text_to_symbols(texts, resources_dir):
+def text_to_symbols(texts, resources_dir, speaker):
     fe = ttsfrd.TtsFrontendEngine()
     fe.initialize(resources_dir)
     fe.set_lang_type("Zh-CN")
@@ -32,6 +33,7 @@ def text_to_symbols(texts, resources_dir):
     for idx, text in enumerate(texts):
         text = text.strip()
         res = fe.gen_tacotron_symbols(text)
+        res = res.replace("F7", speaker)
         sentences = res.split("\n")
         for sentence in sentences:
             arr = sentence.split("\t")
@@ -45,7 +47,9 @@ def text_to_symbols(texts, resources_dir):
     return symbols_lst
 
 
-def text_to_wav(text_file, output_dir, resources_zip_file, am_ckpt, voc_ckpt):
+def text_to_wav(
+    text_file, output_dir, resources_zip_file, am_ckpt, voc_ckpt, speaker=None
+):
     os.makedirs(output_dir, exist_ok=True)
 
     resource_root_dir = os.path.dirname(resources_zip_file)
@@ -60,7 +64,12 @@ def text_to_wav(text_file, output_dir, resources_zip_file, am_ckpt, voc_ckpt):
         texts = text_data.readlines()
 
     logging.info("Converting text to symbols...")
-    symbols_lst = text_to_symbols(texts, resource_dir)
+    am_config = os.path.join(os.path.dirname(os.path.dirname(am_ckpt)), "config.json")
+    with open(am_config, "r") as f:
+        config = yaml.load(f, Loader=yaml.Loader)
+    if speaker is None:
+        speaker = config["linguistic_unit"]["speaker_list"].split(",")[0]
+    symbols_lst = text_to_symbols(texts, resource_dir, speaker)
     symbols_file = os.path.join(output_dir, "symbols.lst")
     with open(symbols_file, "w") as symbol_data:
         for symbol in symbols_lst:
@@ -90,6 +99,13 @@ if __name__ == "__main__":
     parser.add_argument(
         "--voc_ckpt", type=str, required=True, help="Path to voc ckpt file"
     )
+    parser.add_argument(
+        "--speaker",
+        type=str,
+        required=False,
+        default=None,
+        help="The speaker name, default is the first speaker",
+    )
     args = parser.parse_args()
     text_to_wav(
         args.txt,
@@ -97,4 +113,5 @@ if __name__ == "__main__":
         args.res_zip,
         args.am_ckpt,
         args.voc_ckpt,
+        args.speaker,
     )
