@@ -64,7 +64,7 @@ def text_to_wav(
         texts = text_data.readlines()
 
     logging.info("Converting text to symbols...")
-    am_config = os.path.join(os.path.dirname(os.path.dirname(am_ckpt)), "config.json")
+    am_config = os.path.join(os.path.dirname(os.path.dirname(am_ckpt)), "config.yaml")
     with open(am_config, "r") as f:
         config = yaml.load(f, Loader=yaml.Loader)
     if speaker is None:
