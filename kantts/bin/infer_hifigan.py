@@ -7,6 +7,7 @@ import yaml
 import logging
 import numpy as np
 import time
+import glob
 
 ROOT_PATH = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # NOQA: E402
 sys.path.insert(0, os.path.dirname(ROOT_PATH))  # NOQA: E402
@@ -53,19 +54,16 @@ def load_model(ckpt, config=None):
     return model
 
 
-def hifigan_infer(audio_config, model_config, ckpt_path, input_mel, output_dir):
+def hifigan_infer(input_mel, ckpt_path, output_dir, config=None):
     if not torch.cuda.is_available():
         device = torch.device("cpu")
     else:
         torch.backends.cudnn.benchmark = True
         device = torch.device("cuda", 0)
 
-    if audio_config is not None and model_config is not None:
-        with open(audio_config, "r") as f:
+    if config is not None:
+        with open(config, "r") as f:
             config = yaml.load(f, Loader=yaml.Loader)
-
-        with open(model_config, "r") as f:
-            config.update(yaml.load(f, Loader=yaml.Loader))
     else:
         config_path = os.path.join(
             os.path.dirname(os.path.dirname(ckpt_path)), "config.yaml"
@@ -84,11 +82,12 @@ def hifigan_infer(audio_config, model_config, ckpt_path, input_mel, output_dir):
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
 
-    utt_id = os.path.splitext(os.path.basename(input_mel))[0]
-    if input_mel.endswith(".pt"):
-        mel_data = torch.load(input_mel).transpose(0, 1).numpy()
+    if os.path.isfile(input_mel):
+        mel_lst = [input_mel]
+    elif os.path.isdir(input_mel):
+        mel_lst = glob.glob(os.path.join(input_mel, "*mel.npy"))
     else:
-        mel_data = np.load(input_mel)
+        raise ValueError("input_mel should be a file or a directory")
 
     model = load_model(ckpt_path, config)
 
@@ -97,27 +96,36 @@ def hifigan_infer(audio_config, model_config, ckpt_path, input_mel, output_dir):
     model = model.eval().to(device)
 
     with torch.no_grad():
-        # generate
-        mel_data = torch.tensor(mel_data, dtype=torch.float).to(device)
-        # (T, C) -> (B, C, T)
-        mel_data = mel_data.transpose(1, 0).unsqueeze(0)
         start = time.time()
-        y = model(mel_data)
-        if hasattr(model, "pqmf"):
-            y = model.pqmf.synthesis(y)
-        y = y.view(-1).cpu().numpy()
-        rtf = (time.time() - start) / (len(y) / config["audio_config"]["sampling_rate"])
+        pcm_len = 0
+        for mel in mel_lst:
+            utt_id = os.path.splitext(os.path.basename(mel))[0]
+            mel_data = np.load(mel)
+            # generate
+            mel_data = torch.tensor(mel_data, dtype=torch.float).to(device)
+            # (T, C) -> (B, C, T)
+            mel_data = mel_data.transpose(1, 0).unsqueeze(0)
+            y = model(mel_data)
+            if hasattr(model, "pqmf"):
+                y = model.pqmf.synthesis(y)
+            y = y.view(-1).cpu().numpy()
+            pcm_len += len(y)
 
-        # save as PCM 16 bit wav file
-        sf.write(
-            os.path.join(output_dir, f"{utt_id}_gen.wav"),
-            y,
-            config["audio_config"]["sampling_rate"],
-            "PCM_16",
+            # save as PCM 16 bit wav file
+            sf.write(
+                os.path.join(output_dir, f"{utt_id}_gen.wav"),
+                y,
+                config["audio_config"]["sampling_rate"],
+                "PCM_16",
+            )
+        rtf = (time.time() - start) / (
+            pcm_len / config["audio_config"]["sampling_rate"]
         )
 
     # report average RTF
-    logging.info(f"Finished generation of 1 utterances (RTF = {rtf:.03f}).")
+    logging.info(
+        f"Finished generation of {len(mel_lst)} utterances (RTF = {rtf:.03f})."
+    )
 
 
 if __name__ == "__main__":
@@ -126,22 +134,19 @@ if __name__ == "__main__":
         "--ckpt", type=str, required=True, help="Path to model checkpoint"
     )
     parser.add_argument(
-        "--input_mel", type=str, required=True, help="Path to input mel file"
+        "--input_mel",
+        type=str,
+        required=True,
+        help="Path to input mel file or directory containing mel files",
     )
     parser.add_argument(
         "--output_dir", type=str, required=True, help="Path to output directory"
     )
-    parser.add_argument(
-        "--audio_config", type=str, default=None, help="Path to audio config file"
-    )
-    parser.add_argument(
-        "--model_config", type=str, default=None, help="Path to model config file"
-    )
+    parser.add_argument("--config", type=str, default=None, help="Path to config file")
     args = parser.parse_args()
     hifigan_infer(
-        args.audio_config,
-        args.model_config,
-        args.ckpt,
         args.input_mel,
+        args.ckpt,
         args.output_dir,
+        args.config,
     )

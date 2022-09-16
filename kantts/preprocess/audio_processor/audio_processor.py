@@ -111,6 +111,11 @@ class AudioProcessor:
             ]
             dur_file = os.path.join(raw_dur_dir, index + ".npy")
             phone_file = os.path.join(raw_dur_dir, index + ".phone")
+            if not os.path.exists(dur_file) or not os.path.exists(phone_file):
+                logging.warning(
+                    "[AudioProcessor] dur file or phone file not exists: %s", index
+                )
+                continue
             with open(phone_file, "r") as f:
                 phones = f.readlines()
             dur = np.load(dur_file)
@@ -274,14 +279,17 @@ class AudioProcessor:
                     future = executor.submit(
                         trim_silence_with_interval,
                         pcm_data,
-                        self.dur_dict[wav_basename],
+                        self.dur_dict.get(wav_basename, None),
                         self.hop_length,
                     )
                     future.add_done_callback(lambda p: progress.update())
                     futures.append((future, wav_basename))
             # TODO: multi-processing
             for future, wav_basename in tqdm(futures):
-                self.trim_pcm_dict[wav_basename] = future.result()
+                trimed_pcm = future.result()
+                if trimed_pcm is None:
+                    continue
+                self.trim_pcm_dict[wav_basename] = trimed_pcm
                 save_wav(
                     self.trim_pcm_dict[wav_basename],
                     os.path.join(out_wav_dir, wav_basename + ".wav"),
