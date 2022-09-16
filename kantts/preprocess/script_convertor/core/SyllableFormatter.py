@@ -208,8 +208,13 @@ class EnXXSyllableFormatter:
                     phoneName_lst = [phoneName]
 
                 for new_phoneName in phoneName_lst:
-                    #  TODO: check if the phone is in the phoneset
-                    phone_obj = phoneset.m_name_map[new_phoneName]
+                    phone_obj = phoneset.m_name_map.get(new_phoneName, None)
+                    if phone_obj is None:
+                        logging.error(
+                            "EnXXSyllableFormatter.Format: phone %s not found",
+                            new_phoneName,
+                        )
+                        return False
                     phone_obj.m_name = new_phoneName
                     syll.m_phone_list.append(phone_obj)
                     if phone_obj.m_cv_type == PhoneCVType.Vowel:

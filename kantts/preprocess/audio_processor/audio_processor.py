@@ -111,6 +111,11 @@ class AudioProcessor:
             ]
             dur_file = os.path.join(raw_dur_dir, index + ".npy")
             phone_file = os.path.join(raw_dur_dir, index + ".phone")
+            if not os.path.exists(dur_file) or not os.path.exists(phone_file):
+                logging.warning(
+                    "[AudioProcessor] dur file or phone file not exists: %s", index
+                )
+                continue
             with open(phone_file, "r") as f:
                 phones = f.readlines()
             dur = np.load(dur_file)
