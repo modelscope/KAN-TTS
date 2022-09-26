@@ -73,14 +73,14 @@ def hifigan_infer(input_mel, ckpt_path, output_dir, config=None):
         with open(config_path, "r") as f:
             config = yaml.load(f, Loader=yaml.Loader)
 
-    logging_to_file(os.path.join(output_dir, "stdout.log"))
-
     for key, value in config.items():
         logging.info(f"{key} = {value}")
 
     # check directory existence
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
+
+    logging_to_file(os.path.join(output_dir, "stdout.log"))
 
     if os.path.isfile(input_mel):
         mel_lst = [input_mel]
