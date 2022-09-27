@@ -31,6 +31,14 @@ class Syllable(XmlObj):
         #  Special case: word with single syllable, the last phone's word_pos should be "word_end"
         if word_pos == "word_begin" and syll_pos == "s_end" and single_syllable_word:
             word_pos = "word_end"
+        elif (
+            word_pos == "word_begin" and syll_pos != "s_begin"
+        ):  # FIXME: keep accord with Engine logic
+            word_pos = "word_middle"
+        elif word_pos == "word_end" and syll_pos != "s_end":
+            word_pos = "word_middle"
+        else:
+            pass
 
         return "{{{}$tone{}${}${}}}".format(phone_name, tone_text, syll_pos, word_pos)
 
