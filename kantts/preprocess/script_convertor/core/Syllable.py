@@ -31,11 +31,12 @@ class Syllable(XmlObj):
         #  Special case: word with single syllable, the last phone's word_pos should be "word_end"
         if word_pos == "word_begin" and syll_pos == "s_end" and single_syllable_word:
             word_pos = "word_end"
-        elif (
-            word_pos == "word_begin" and syll_pos != "s_begin"
-        ):  # FIXME: keep accord with Engine logic
+        elif word_pos == "word_begin" and syll_pos not in [
+            "s_begin",
+            "s_both",
+        ]:  # FIXME: keep accord with Engine logic
             word_pos = "word_middle"
-        elif word_pos == "word_end" and syll_pos != "s_end":
+        elif word_pos == "word_end" and syll_pos not in ["s_end", "s_both"]:
             word_pos = "word_middle"
         else:
             pass
