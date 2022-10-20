@@ -1,11 +1,10 @@
 import torch
 import torch.nn.functional as F
 import torch.nn as nn
-from torch.nn import Conv1d, Conv2d, AvgPool1d
 from torch.nn.utils import weight_norm, spectral_norm
 from distutils.version import LooseVersion
 from pytorch_wavelets import DWT1DForward
-from .layers import CausalConv1d, CausalConvTranspose1d, ResidualBlock
+from .layers import Conv1d, CausalConv1d, ConvTranspose1d, CausalConvTranspose1d, ResidualBlock
 from kantts.utils.audio_torch import stft
 import copy
 
@@ -25,6 +24,7 @@ class Generator(torch.nn.Module):
         resblock_dilations=[(1, 3, 5), (1, 3, 5), (1, 3, 5)],
         repeat_upsample=True,
         bias=True,
+        causal=True,
         nonlinear_activation="LeakyReLU",
         nonlinear_activation_params={"negative_slope": 0.1},
         use_weight_norm=True,
@@ -36,27 +36,32 @@ class Generator(torch.nn.Module):
         assert len(upsample_scales) == len(upsample_kernal_sizes)
         assert len(resblock_dilations) == len(resblock_kernel_sizes)
 
+        self.upsample_scales = upsample_scales
         self.repeat_upsample = repeat_upsample
         self.num_upsamples = len(upsample_kernal_sizes)
         self.num_kernels = len(resblock_kernel_sizes)
         self.out_channels = out_channels
-
-        self.conv_pre = CausalConv1d(
-            in_channels, channels, kernel_size, 1, padding=(kernel_size - 1) // 2
-        )
-
+        
         self.transpose_upsamples = torch.nn.ModuleList()
         self.repeat_upsamples = torch.nn.ModuleList()  # for repeat upsampling
         self.conv_blocks = torch.nn.ModuleList()
+        
+        conv_cls = CausalConv1d if causal else Conv1d
+        conv_transposed_cls = CausalConvTranspose1d if causal else ConvTranspose1d
+
+        self.conv_pre = conv_cls(
+            in_channels, channels, kernel_size, 1, padding=(kernel_size - 1) // 2
+        )
 
         for i in range(len(upsample_kernal_sizes)):
-            assert upsample_kernal_sizes[i] == 2 * upsample_scales[i]
+            if causal:
+                assert upsample_kernal_sizes[i] == 2 * upsample_scales[i]
             self.transpose_upsamples.append(
                 torch.nn.Sequential(
                     getattr(torch.nn, nonlinear_activation)(
                         **nonlinear_activation_params
                     ),
-                    CausalConvTranspose1d(
+                    conv_transposed_cls(
                         channels // (2 ** i),
                         channels // (2 ** (i + 1)),
                         upsample_kernal_sizes[i],
@@ -73,7 +78,7 @@ class Generator(torch.nn.Module):
                         getattr(torch.nn, nonlinear_activation)(
                             **nonlinear_activation_params
                         ),
-                        CausalConv1d(
+                        conv_cls(
                             channels // (2 ** i),
                             channels // (2 ** (i + 1)),
                             kernel_size=kernel_size,
@@ -91,10 +96,11 @@ class Generator(torch.nn.Module):
                         dilation=resblock_dilations[j],
                         nonlinear_activation=nonlinear_activation,
                         nonlinear_activation_params=nonlinear_activation_params,
+                        causal=causal,
                     )
                 )
 
-        self.conv_post = CausalConv1d(
+        self.conv_post = conv_cls(
             channels // (2 ** (i + 1)),
             out_channels,
             kernel_size,
@@ -164,7 +170,7 @@ class PeriodDiscriminator(torch.nn.Module):
             self.convs.append(
                 torch.nn.Sequential(
                     norm_f(
-                        torch.nn.Conv2d(
+                        nn.Conv2d(
                             in_chs,
                             out_chs,
                             (kernel_sizes[0], 1),
@@ -180,7 +186,7 @@ class PeriodDiscriminator(torch.nn.Module):
             in_chs = out_chs
             out_chs = min(out_chs * 4, max_downsample_channels)
 
-        self.conv_post = torch.nn.Conv2d(
+        self.conv_post = nn.Conv2d(
             out_chs,
             out_channels,
             (kernel_sizes[1] - 1, 1),
@@ -271,7 +277,7 @@ class ScaleDiscriminator(torch.nn.Module):
         self.convs.append(
             torch.nn.Sequential(
                 norm_f(
-                    torch.nn.Conv1d(
+                    nn.Conv1d(
                         in_channels,
                         channels,
                         kernel_sizes[0],
@@ -290,7 +296,7 @@ class ScaleDiscriminator(torch.nn.Module):
             self.convs.append(
                 torch.nn.Sequential(
                     norm_f(
-                        torch.nn.Conv1d(
+                        nn.Conv1d(
                             in_chs,
                             out_chs,
                             kernel_size=kernel_sizes[1],
@@ -313,7 +319,7 @@ class ScaleDiscriminator(torch.nn.Module):
         self.convs.append(
             torch.nn.Sequential(
                 norm_f(
-                    torch.nn.Conv1d(
+                    nn.Conv1d(
                         in_chs,
                         out_chs,
                         kernel_size=kernel_sizes[2],
@@ -327,7 +333,7 @@ class ScaleDiscriminator(torch.nn.Module):
         )
 
         self.conv_post = norm_f(
-            torch.nn.Conv1d(
+            nn.Conv1d(
                 out_chs,
                 out_channels,
                 kernel_size=kernel_sizes[3],
@@ -390,13 +396,13 @@ class MultiScaleDiscriminator(torch.nn.Module):
             )
             self.aux_convs = nn.ModuleList(
                 [
-                    weight_norm(Conv1d(2, 1, 15, 1, padding=7)),
-                    weight_norm(Conv1d(2, 1, 15, 1, padding=7)),
+                    weight_norm(nn.Conv1d(2, 1, 15, 1, padding=7)),
+                    weight_norm(nn.Conv1d(2, 1, 15, 1, padding=7)),
                 ]
             )
         else:
             self.meanpools = nn.ModuleList(
-                [AvgPool1d(4, 2, padding=2), AvgPool1d(4, 2, padding=2)]
+                [nn.AvgPool1d(4, 2, padding=2), nn.AvgPool1d(4, 2, padding=2)]
             )
             self.aux_convs = None
 
@@ -448,7 +454,7 @@ class SpecDiscriminator(torch.nn.Module):
         self.convs.append(
             torch.nn.Sequential(
                 norm_f(
-                    Conv2d(
+                    nn.Conv2d(
                         fft_size // 2 + 1,
                         channels,
                         (init_kernel, 1),
@@ -464,7 +470,7 @@ class SpecDiscriminator(torch.nn.Module):
             self.convs.append(
                 torch.nn.Sequential(
                     norm_f(
-                        Conv2d(
+                        nn.Conv2d(
                             channels,
                             channels,
                             (kernel_size, 1),
@@ -481,7 +487,7 @@ class SpecDiscriminator(torch.nn.Module):
         self.convs.append(
             torch.nn.Sequential(
                 norm_f(
-                    Conv2d(
+                    nn.Conv2d(
                         channels,
                         channels,
                         (final_kernel, 1),
@@ -494,7 +500,7 @@ class SpecDiscriminator(torch.nn.Module):
         )
 
         self.conv_post = norm_f(
-            Conv2d(
+            nn.Conv2d(
                 channels,
                 1,
                 (post_conv_kernel, 1),
