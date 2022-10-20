@@ -1,13 +1,49 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.nn import Conv1d, ConvTranspose1d
 from torch.nn.utils import weight_norm, remove_weight_norm
 from kantts.models.utils import init_weights
 
 
-def get_padding_casual(kernel_size, dilation=1):
+def get_padding(kernel_size, dilation=1):
     return int((kernel_size * dilation - dilation) / 2)
+
+class Conv1d(torch.nn.Module):
+    def __init__(
+        self,
+        in_channels,
+        out_channels,
+        kernel_size,
+        stride=1,
+        padding=0,
+        dilation=1,
+        groups=1,
+        bias=True,
+        padding_mode="zeros",
+    ):
+        super(Conv1d, self).__init__()
+        self.conv1d = weight_norm(
+            nn.Conv1d(
+                in_channels,
+                out_channels,
+                kernel_size,
+                stride,
+                padding=padding,
+                dilation=dilation,
+                groups=groups,
+                bias=bias,
+                padding_mode=padding_mode,
+            )
+        )
+        self.conv1d.apply(init_weights)
+
+
+    def forward(self, x):
+        x = self.conv1d(x)
+        return x
+    
+    def remove_weight_norm(self):
+        remove_weight_norm(self.conv1d)
 
 
 class CausalConv1d(torch.nn.Module):
@@ -26,7 +62,7 @@ class CausalConv1d(torch.nn.Module):
         super(CausalConv1d, self).__init__()
         self.pad = (kernel_size - 1) * dilation
         self.conv1d = weight_norm(
-            Conv1d(
+            nn.Conv1d(
                 in_channels,
                 out_channels,
                 kernel_size,
@@ -52,6 +88,36 @@ class CausalConv1d(torch.nn.Module):
         remove_weight_norm(self.conv1d)
 
 
+class ConvTranspose1d(torch.nn.Module):
+    def __init__(
+        self,
+        in_channels,
+        out_channels,
+        kernel_size,
+        stride,
+        padding=0,
+        output_padding=0,
+    ):
+        super(ConvTranspose1d, self).__init__()
+        self.deconv = weight_norm(
+            nn.ConvTranspose1d(
+                in_channels,
+                out_channels,
+                kernel_size,
+                stride,
+                padding=padding,
+                output_padding=0,
+            )
+        )
+        self.deconv.apply(init_weights)
+
+    def forward(self, x):
+        return self.deconv(x)
+
+    def remove_weight_norm(self):
+        remove_weight_norm(self.deconv)
+
+
 #  FIXME: HACK to get shape right
 class CausalConvTranspose1d(torch.nn.Module):
     """CausalConvTranspose1d module with customized initialization."""
@@ -68,7 +134,7 @@ class CausalConvTranspose1d(torch.nn.Module):
         """Initialize CausalConvTranspose1d module."""
         super(CausalConvTranspose1d, self).__init__()
         self.deconv = weight_norm(
-            ConvTranspose1d(
+            nn.ConvTranspose1d(
                 in_channels,
                 out_channels,
                 kernel_size,
@@ -104,18 +170,21 @@ class ResidualBlock(torch.nn.Module):
         dilation=(1, 3, 5),
         nonlinear_activation="LeakyReLU",
         nonlinear_activation_params={"negative_slope": 0.1},
+        causal=False,
     ):
         super(ResidualBlock, self).__init__()
         assert kernel_size % 2 == 1, "Kernal size must be odd number."
+        conv_cls = CausalConv1d if causal else Conv1d
         self.convs1 = nn.ModuleList(
             [
-                CausalConv1d(
+                conv_cls(
                     channels,
                     channels,
                     kernel_size,
                     1,
                     dilation=dilation[i],
-                    padding=get_padding_casual(kernel_size, dilation[i]),
+                    padding=get_padding(kernel_size, dilation[i]),
+                    
                 )
                 for i in range(len(dilation))
             ]
@@ -123,13 +192,13 @@ class ResidualBlock(torch.nn.Module):
 
         self.convs2 = nn.ModuleList(
             [
-                CausalConv1d(
+                conv_cls(
                     channels,
                     channels,
                     kernel_size,
                     1,
                     dilation=1,
-                    padding=get_padding_casual(kernel_size, 1),
+                    padding=get_padding(kernel_size, 1),
                 )
                 for i in range(len(dilation))
             ]

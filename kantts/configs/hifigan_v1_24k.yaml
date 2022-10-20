@@ -17,6 +17,7 @@ Model:
             - [1, 3, 5]
             - [1, 3, 5]
       bias: true                           
+      causal: true                             
       nonlinear_activation: "LeakyReLU"    
       nonlinear_activation_params:         
         negative_slope: 0.1
