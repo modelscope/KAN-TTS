@@ -49,6 +49,7 @@ Model:
         postnet_dropout: 0.1
         postnet_shift: 17
         postnet_lstm_units: 128
+        MAS: False
 
     optimizer:
       type: Adam

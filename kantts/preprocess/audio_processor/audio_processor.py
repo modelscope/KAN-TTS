@@ -596,6 +596,7 @@ class AudioProcessor:
             self.f0uv_dict[wav_basename] = norm_f0
 
         #  phone level average
+        #  if there is no duration then save the frame-level f0
         if self.phone_level_feature and len(self.dur_dict) > 0:
             logging.info("[AudioProcessor] Pitch turn to phone-level is proceeding...")
             with ProcessPoolExecutor(max_workers=self.num_workers) as executor, tqdm(
@@ -626,7 +627,7 @@ class AudioProcessor:
         for wav_basename in self.f0uv_dict:
             np.save(
                 os.path.join(out_feature_dir, wav_basename + ".npy"),
-                self.f0uv_dict[wav_basename],
+                self.f0uv_dict[wav_basename].reshape(-1),
             )
 
         logging.info("[AudioProcessor] Pitch normalization finished")
@@ -705,6 +706,7 @@ class AudioProcessor:
             self.energy_dict[wav_basename] = norm_energy
 
         #  phone level average
+        #  if there is no duration then save the frame-level energy
         if self.phone_level_feature and len(self.dur_dict) > 0:
             with ProcessPoolExecutor(max_workers=self.num_workers) as executor, tqdm(
                 total=len(self.energy_dict)
@@ -735,7 +737,7 @@ class AudioProcessor:
         for wav_basename in self.energy_dict:
             np.save(
                 os.path.join(out_feature_dir, wav_basename + ".npy"),
-                self.energy_dict[wav_basename],
+                self.energy_dict[wav_basename].reshape(-1),
             )
 
         logging.info("[AudioProcessor] Energy normalization finished")
@@ -759,6 +761,8 @@ class AudioProcessor:
 
         os.makedirs(out_data_dir, exist_ok=True)
 
+        with_duration = os.path.exists(src_interval_dir)
+
         #  TODO: to resume from previous process, a log file is needed
         normed_wav_dir = os.path.join(out_data_dir, "wav")
         trimmed_wav_dir = os.path.join(out_data_dir, "trim_wav")
@@ -768,20 +772,21 @@ class AudioProcessor:
             logging.error("[AudioProcessor] amp_normalize failed, exit")
             return False
 
-        #  Raw duration, non-trimmed
-        succeed = self.duration_generate(src_interval_dir, out_duration_dir)
-        if not succeed:
-            logging.error("[AudioProcessor] duration_generate failed, exit")
-            return False
+        if with_duration:
+            #  Raw duration, non-trimmed
+            succeed = self.duration_generate(src_interval_dir, out_duration_dir)
+            if not succeed:
+                logging.error("[AudioProcessor] duration_generate failed, exit")
+                return False
 
-        succeed = self.trim_silence_wav_with_interval(
-            normed_wav_dir, out_duration_dir, trimmed_wav_dir
-        )
-        if not succeed:
-            logging.error(
-                "[AudioProcessor] trim_silence_wav_with_interval failed, exit"
+            succeed = self.trim_silence_wav_with_interval(
+                normed_wav_dir, out_duration_dir, trimmed_wav_dir
             )
-            return False
+            if not succeed:
+                logging.error(
+                    "[AudioProcessor] trim_silence_wav_with_interval failed, exit"
+                )
+                return False
 
         succeed = self.mel_extract(normed_wav_dir, out_mel_dir)
         if not succeed:
@@ -789,22 +794,26 @@ class AudioProcessor:
             return False
 
         if self.trim_silence:
-            self.trim_mel_extract(normed_wav_dir, out_trim_mel_dir)
+            feat_wav_dir = trimmed_wav_dir
+            self.trim_silence_wav(normed_wav_dir, feat_wav_dir)
+            self.trim_mel_extract(feat_wav_dir, out_trim_mel_dir)
+        else:
+            feat_wav_dir = normed_wav_dir
 
-        if aux_metafile is not None:
+        if aux_metafile is not None and with_duration:
             self.calibrate_SyllableDuration(
                 out_duration_dir, aux_metafile, out_cali_duration_dir
             )
 
-            succeed = self.pitch_extract(normed_wav_dir, out_f0_dir)
-            if not succeed:
-                logging.error("[AudioProcessor] pitch_extract failed, exit")
-                return False
+        succeed = self.pitch_extract(feat_wav_dir, out_f0_dir)
+        if not succeed:
+            logging.error("[AudioProcessor] pitch_extract failed, exit")
+            return False
 
-            succeed = self.energy_extract(normed_wav_dir, out_energy_dir)
-            if not succeed:
-                logging.error("[AudioProcessor] energy_extract failed, exit")
-                return False
+        succeed = self.energy_extract(feat_wav_dir, out_energy_dir)
+        if not succeed:
+            logging.error("[AudioProcessor] energy_extract failed, exit")
+            return False
 
         # recording badcase list
         with open(os.path.join(out_data_dir, "badlist.txt"), "w") as f:

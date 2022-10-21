@@ -85,7 +85,7 @@ def hifigan_infer(input_mel, ckpt_path, output_dir, config=None):
     if os.path.isfile(input_mel):
         mel_lst = [input_mel]
     elif os.path.isdir(input_mel):
-        mel_lst = glob.glob(os.path.join(input_mel, "*mel.npy"))
+        mel_lst = glob.glob(os.path.join(input_mel, "*.npy"))
     else:
         raise ValueError("input_mel should be a file or a directory")
 
