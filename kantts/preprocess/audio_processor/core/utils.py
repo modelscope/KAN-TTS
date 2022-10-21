@@ -393,7 +393,7 @@ def align_length(in_data, tgt_data, basename=None):
 
     if in_len < tgt_len:
         out_data = np.pad(
-            in_data, (0, tgt_len - in_len), "constant", constant_values=0.0
+            in_data, ((0, tgt_len - in_len), (0, 0)), "constant", constant_values=0.0
         )
     else:
         out_data = in_data[:tgt_len]

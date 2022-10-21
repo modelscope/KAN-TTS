@@ -428,8 +428,9 @@ class SeqCELoss(torch.nn.Module):
         self.criterion = torch.nn.CrossEntropyLoss(reduction="none")
 
     def forward(self, logits, targets, masks):
-        loss = self.criterion(logits.contiguous(
-        ).view(-1, logits.size(-1)), targets.contiguous().view(-1))
+        loss = self.criterion(
+            logits.contiguous().view(-1, logits.size(-1)), targets.contiguous().view(-1)
+        )
         preds = torch.argmax(logits, dim=-1).contiguous().view(-1)
         masks = masks.contiguous().view(-1)
 
@@ -437,6 +438,54 @@ class SeqCELoss(torch.nn.Module):
         err = torch.sum((preds != targets.view(-1)) * masks) / masks.sum()
 
         return loss, err
+
+
+class AttentionBinarizationLoss(torch.nn.Module):
+    def __init__(self, start_epoch=0, warmup_epoch=100):
+        super(AttentionBinarizationLoss, self).__init__()
+        self.start_epoch = start_epoch
+        self.warmup_epoch = warmup_epoch
+
+    def forward(self, epoch, hard_attention, soft_attention, eps=1e-12):
+        log_sum = torch.log(
+            torch.clamp(soft_attention[hard_attention == 1], min=eps)
+        ).sum()
+        kl_loss = -log_sum / hard_attention.sum()
+        if epoch < self.start_epoch:
+            warmup_ratio = 0
+        else:
+            warmup_ratio = min(1.0, (epoch - self.start_epoch) / self.warmup_epoch)
+        return kl_loss * warmup_ratio
+
+
+class AttentionCTCLoss(torch.nn.Module):
+    def __init__(self, blank_logprob=-1):
+        super(AttentionCTCLoss, self).__init__()
+        self.log_softmax = torch.nn.LogSoftmax(dim=3)
+        self.blank_logprob = blank_logprob
+        self.CTCLoss = torch.nn.CTCLoss(zero_infinity=True)
+
+    def forward(self, attn_logprob, in_lens, out_lens):
+        key_lens = in_lens
+        query_lens = out_lens
+        attn_logprob_padded = F.pad(
+            input=attn_logprob, pad=(1, 0, 0, 0, 0, 0, 0, 0), value=self.blank_logprob
+        )
+        cost_total = 0.0
+        for bid in range(attn_logprob.shape[0]):
+            target_seq = torch.arange(1, key_lens[bid] + 1).unsqueeze(0)
+            curr_logprob = attn_logprob_padded[bid].permute(1, 0, 2)
+            curr_logprob = curr_logprob[: query_lens[bid], :, : key_lens[bid] + 1]
+            curr_logprob = self.log_softmax(curr_logprob[None])[0]
+            ctc_cost = self.CTCLoss(
+                curr_logprob,
+                target_seq,
+                input_lengths=query_lens[bid : bid + 1],
+                target_lengths=key_lens[bid : bid + 1],
+            )
+            cost_total += ctc_cost
+        cost = cost_total / attn_logprob.shape[0]
+        return cost
 
 
 #  TODO: create a mapping for new loss functions
@@ -450,6 +499,8 @@ loss_dict = {
     "MelReconLoss": MelReconLoss,
     "ProsodyReconLoss": ProsodyReconLoss,
     "SeqCELoss": SeqCELoss,
+    "AttentionBinarizationLoss": AttentionBinarizationLoss,
+    "AttentionCTCLoss": AttentionCTCLoss,
 }
 
 

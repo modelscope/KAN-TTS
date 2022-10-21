@@ -5,7 +5,7 @@ Model:
 #########################################################
   KanTtsSAMBERT:
     params:
-        max_len: 900
+        max_len: 800
 
         embedding_dim: 512 
         encoder_num_layers: 8
@@ -40,7 +40,7 @@ Model:
         decoder_relu_dropout: 0.1
 
         outputs_per_step: 3
-        num_mels: 128
+        num_mels: 80
 
         postnet_filter_size: 41
         postnet_fsmn_num_layers: 4
@@ -49,7 +49,9 @@ Model:
         postnet_dropout: 0.1
         postnet_shift: 17
         postnet_lstm_units: 128
-        MAS: False
+
+        MAS: True
+          
 
     optimizer:
       type: Adam
@@ -80,6 +82,15 @@ Loss:
     enable: True
     params:
       loss_type: mae
+
+  AttentionCTCLoss:
+    enable: True
+
+  AttentionBinarizationLoss:
+    enable: True
+    params:
+      start_epoch: 0
+      warmup_epoch: 100
 
 
 ###########################################################

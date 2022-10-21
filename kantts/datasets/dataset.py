@@ -6,9 +6,25 @@ from multiprocessing import Manager
 import librosa
 import numpy as np
 import random
+import functools
 from tqdm import tqdm
 import math
 from kantts.utils.ling_unit.ling_unit import KanTtsLinguisticUnit
+from scipy.stats import betabinom
+
+
+@functools.lru_cache(maxsize=256)
+def beta_binomial_prior_distribution(phoneme_count, mel_count, scaling=1.0):
+    P = phoneme_count
+    M = mel_count
+    x = np.arange(0, P)
+    mel_text_probs = []
+    for i in range(1, M + 1):
+        a, b = scaling * i, scaling * (M + 1 - i)
+        rv = betabinom(P, a, b)
+        mel_i_prob = rv.pmf(x)
+        mel_text_probs.append(mel_i_prob)
+    return torch.tensor(np.array(mel_text_probs))
 
 
 class Padder(object):
@@ -284,6 +300,7 @@ class AM_Dataset(torch.utils.data.Dataset):
     ):
         self.meta = []
         self.config = config
+        self.with_duration = True
 
         if not isinstance(metafile, list):
             metafile = [metafile]
@@ -326,9 +343,15 @@ class AM_Dataset(torch.utils.data.Dataset):
 
         ling_data = self.ling_unit.encode_symbol_sequence(ling_txt)
         mel_data = np.load(mel_file)
-        dur_data = np.load(dur_file)
+        dur_data = np.load(dur_file) if dur_file is not None else None
         f0_data = np.load(f0_file)
         energy_data = np.load(energy_file)
+        if self.with_duration:
+            attn_prior = None
+        else:
+            attn_prior = beta_binomial_prior_distribution(
+                len(ling_data[0]), mel_data.shape[0]
+            )
 
         #  make sure the audio length and feature length are matched
         #  assert len(mel_data) == np.sum(
@@ -346,9 +369,16 @@ class AM_Dataset(torch.utils.data.Dataset):
         #  ), "energy and dur length not matched: {} vs {}".format(energy_file, dur_file)
 
         if self.allow_cache:
-            self.caches[idx] = (ling_data, mel_data, dur_data, f0_data, energy_data)
+            self.caches[idx] = (
+                ling_data,
+                mel_data,
+                dur_data,
+                f0_data,
+                energy_data,
+                attn_prior,
+            )
 
-        return (ling_data, mel_data, dur_data, f0_data, energy_data)
+        return (ling_data, mel_data, dur_data, f0_data, energy_data, attn_prior)
 
     def load_meta(self, metafile, data_dir):
         with open(metafile, "r") as f:
@@ -362,21 +392,27 @@ class AM_Dataset(torch.utils.data.Dataset):
         f0_dir = os.path.join(data_dir, "f0")
         energy_dir = os.path.join(data_dir, "energy")
 
+        self.with_duration = os.path.exists(dur_dir)
+
         items = []
         logging.info("Loading metafile...")
         for line in tqdm(lines):
             line = line.strip()
             index, ling_txt = line.split("\t")
             mel_file = os.path.join(mel_dir, index + ".npy")
-            dur_file = os.path.join(dur_dir, index + ".npy")
+            if self.with_duration:
+                dur_file = os.path.join(dur_dir, index + ".npy")
+            else:
+                dur_file = None
             f0_file = os.path.join(f0_dir, index + ".npy")
             energy_file = os.path.join(energy_dir, index + ".npy")
             if (
                 os.path.exists(mel_file)
-                and os.path.exists(dur_file)
                 and os.path.exists(f0_file)
                 and os.path.exists(energy_file)
             ):
+                if self.with_duration and not os.path.exists(dur_file):
+                    continue
                 items.append(
                     (
                         ling_txt,
@@ -472,16 +508,36 @@ class AM_Dataset(torch.utils.data.Dataset):
         data_dict["mel_targets"] = self.padder._prepare_targets(
             [x[1] for x in batch], max_output_round_length, 0.0
         )
-        data_dict["durations"] = self.padder._prepare_durations(
-            [x[2] for x in batch], max_input_length, max_output_round_length
-        )
+        if self.with_duration:
+            data_dict["durations"] = self.padder._prepare_durations(
+                [x[2] for x in batch], max_input_length, max_output_round_length
+            )
+        else:
+            data_dict["durations"] = None
+
+        if self.with_duration:
+            feats_padding_length = max_input_length
+        else:
+            feats_padding_length = max_output_round_length
 
         data_dict["pitch_contours"] = self.padder._prepare_scalar_inputs(
-            [x[3] for x in batch], max_input_length, 0.0
+            [x[3] for x in batch], feats_padding_length, 0.0
         ).float()
         data_dict["energy_contours"] = self.padder._prepare_scalar_inputs(
-            [x[4] for x in batch], max_input_length, 0.0
+            [x[4] for x in batch], feats_padding_length, 0.0
         ).float()
+
+        if self.with_duration:
+            data_dict["attn_priors"] = None
+        else:
+            data_dict["attn_priors"] = torch.zeros(
+                len(batch), max_output_round_length, max_input_length
+            )
+            for i in range(len(batch)):
+                attn_prior = batch[i][5]
+                data_dict["attn_priors"][
+                    i, : attn_prior.shape[0], : attn_prior.shape[1]
+                ] = attn_prior
 
         return data_dict
 
@@ -535,8 +591,16 @@ class MaskingActor(object):
 
         return mask
 
-    def _input_bert_masking(self, sequence_array, nb_symbol_category,
-                            mask_symbol_id, mask, p2=0.8, p3=0.1, p4=0.1):
+    def _input_bert_masking(
+        self,
+        sequence_array,
+        nb_symbol_category,
+        mask_symbol_id,
+        mask,
+        p2=0.8,
+        p3=0.1,
+        p4=0.1,
+    ):
         sequence_array_mask = sequence_array.copy()
         mask_id = np.where(mask == 1)[0]
         mask_len = len(mask_id)
@@ -544,16 +608,19 @@ class MaskingActor(object):
         np.random.shuffle(rand)
 
         # [MASK]
-        mask_id_p2 = mask_id[rand[0:int(math.floor(mask_len * p2))]]
+        mask_id_p2 = mask_id[rand[0 : int(math.floor(mask_len * p2))]]
         if len(mask_id_p2) > 0:
             sequence_array_mask[mask_id_p2] = mask_symbol_id
 
         # rand
-        mask_id_p3 = mask_id[rand[int(math.floor(
-            mask_len * p2)):int(math.floor(mask_len * p2)) + int(math.floor(mask_len * p3))]]
+        mask_id_p3 = mask_id[
+            rand[
+                int(math.floor(mask_len * p2)) : int(math.floor(mask_len * p2))
+                + int(math.floor(mask_len * p3))
+            ]
+        ]
         if len(mask_id_p3) > 0:
-            sequence_array_mask[mask_id_p3] = random.randint(
-                0, nb_symbol_category - 1)
+            sequence_array_mask[mask_id_p3] = random.randint(0, nb_symbol_category - 1)
 
         # ori
         # do nothing
@@ -590,14 +657,17 @@ class BERT_Text_Dataset(torch.utils.data.Dataset):
             if not os.path.exists(data_dir):
                 logging.error("data dir not found: {}".format(data_dir))
                 raise ValueError(
-                    "[BERT_Text_Dataset] data dir: {} not found".format(data_dir))
+                    "[BERT_Text_Dataset] data dir: {} not found".format(data_dir)
+                )
             self.meta.extend(self.load_meta(meta_file, data_dir))
 
         self.allow_cache = allow_cache
 
         self.ling_unit = KanTtsLinguisticUnit(config)
         self.padder = Padder()
-        self.masking_actor = MaskingActor(self.config["Model"]["KanTtsTextsyBERT"]["params"]["mask_ratio"])
+        self.masking_actor = MaskingActor(
+            self.config["Model"]["KanTtsTextsyBERT"]["params"]["mask_ratio"]
+        )
 
         if allow_cache:
             self.manager = Manager()
@@ -634,11 +704,7 @@ class BERT_Text_Dataset(torch.utils.data.Dataset):
             line = line.strip()
             index, ling_txt = line.split("\t")
 
-            items.append(
-                (
-                    ling_txt
-                )
-            )
+            items.append((ling_txt))
 
         return items
 
@@ -658,7 +724,9 @@ class BERT_Text_Dataset(torch.utils.data.Dataset):
 
     def bert_masking(self, ling_data):
         length = len(ling_data[0])
-        mask = self.masking_actor._get_random_mask(length, p1=self.masking_actor.mask_ratio)
+        mask = self.masking_actor._get_random_mask(
+            length, p1=self.masking_actor.mask_ratio
+        )
         mask[-1] = 0
 
         # sy_masked
@@ -670,7 +738,8 @@ class BERT_Text_Dataset(torch.utils.data.Dataset):
             mask,
             p2=0.8,
             p3=0.1,
-            p4=0.1)
+            p4=0.1,
+        )
 
         return (mask, ling_sy_masked_data)
 
@@ -727,7 +796,8 @@ class BERT_Text_Dataset(torch.utils.data.Dataset):
 
         data_dict["targets"] = targets_sy
         data_dict["bert_masks"] = self.padder._prepare_scalar_inputs(
-            [x[2]for x in batch], max_input_length, 0.0)
+            [x[2] for x in batch], max_input_length, 0.0
+        )
 
         return data_dict
 
@@ -755,10 +825,8 @@ def get_bert_text_datasets(
         train_meta_lst.append(train_meta)
         valid_meta_lst.append(valid_meta)
 
-    train_dataset = BERT_Text_Dataset(
-        config, train_meta_lst, root_dir, allow_cache)
+    train_dataset = BERT_Text_Dataset(config, train_meta_lst, root_dir, allow_cache)
 
-    valid_dataset = BERT_Text_Dataset(
-        config, valid_meta_lst, root_dir, allow_cache)
+    valid_dataset = BERT_Text_Dataset(config, valid_meta_lst, root_dir, allow_cache)
 
     return train_dataset, valid_dataset

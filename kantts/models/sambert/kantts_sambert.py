@@ -13,6 +13,8 @@ from kantts.models.sambert.adaptors import (
     VarRnnARPredictor,
 )
 from kantts.models.sambert.fsmn import FsmnEncoderV2
+from kantts.models.sambert.alignment import b_mas
+from kantts.models.sambert.attention import ConvAttention
 
 from kantts.models.utils import get_mask_from_lengths
 
@@ -322,7 +324,7 @@ class TextFftEncoder(nn.Module):
         if hasattr(self, "ling_proj"):
             enc_output = self.ling_proj(enc_output)
 
-        return enc_output, enc_slf_attn_list
+        return enc_output, enc_slf_attn_list, ling_embedding
 
 
 class VarianceAdaptor(nn.Module):
@@ -638,59 +640,29 @@ class PostNet(nn.Module):
         return mel_residual_output
 
 
-def mel_recon_loss_fn(output_lengths, mel_targets, dec_outputs, postnet_outputs=None):
-    mae_loss = nn.L1Loss(reduction="none")
+def average_frame_feat(pitch, durs):
+    durs_cums_ends = torch.cumsum(durs, dim=1).long()
+    durs_cums_starts = F.pad(durs_cums_ends[:, :-1], (1, 0))
+    pitch_nonzero_cums = F.pad(torch.cumsum(pitch != 0.0, dim=2), (1, 0))
+    pitch_cums = F.pad(torch.cumsum(pitch, dim=2), (1, 0))
 
-    output_masks = get_mask_from_lengths(output_lengths, max_len=mel_targets.size(1))
-    output_masks = ~output_masks
-    valid_outputs = output_masks.sum()
+    bs, lengths = durs_cums_ends.size()
+    n_formants = pitch.size(1)
+    dcs = durs_cums_starts[:, None, :].expand(bs, n_formants, lengths)
+    dce = durs_cums_ends[:, None, :].expand(bs, n_formants, lengths)
 
-    mel_loss_ = torch.sum(
-        mae_loss(mel_targets, dec_outputs) * output_masks.unsqueeze(-1)
-    ) / (valid_outputs * mel_targets.size(-1))
+    pitch_sums = (
+        torch.gather(pitch_cums, 2, dce) - torch.gather(pitch_cums, 2, dcs)
+    ).float()
+    pitch_nelems = (
+        torch.gather(pitch_nonzero_cums, 2, dce)
+        - torch.gather(pitch_nonzero_cums, 2, dcs)
+    ).float()
 
-    if postnet_outputs is not None:
-        mel_loss = torch.sum(
-            mae_loss(mel_targets, postnet_outputs) * output_masks.unsqueeze(-1)
-        ) / (valid_outputs * mel_targets.size(-1))
-    else:
-        mel_loss = 0.0
-
-    return mel_loss_, mel_loss
-
-
-def prosody_recon_loss_fn(
-    input_lengths,
-    duration_targets,
-    pitch_targets,
-    energy_targets,
-    log_duration_predictions,
-    pitch_predictions,
-    energy_predictions,
-):
-    mae_loss = nn.L1Loss(reduction="none")
-
-    input_masks = get_mask_from_lengths(input_lengths, max_len=duration_targets.size(1))
-    input_masks = ~input_masks
-    valid_inputs = input_masks.sum()
-
-    dur_loss = (
-        torch.sum(
-            mae_loss(torch.log(duration_targets.float() + 1), log_duration_predictions)
-            * input_masks
-        )
-        / valid_inputs
+    pitch_avg = torch.where(
+        pitch_nelems == 0.0, pitch_nelems, pitch_sums / pitch_nelems
     )
-    pitch_loss = (
-        torch.sum(mae_loss(pitch_targets, pitch_predictions) * input_masks)
-        / valid_inputs
-    )
-    energy_loss = (
-        torch.sum(mae_loss(energy_targets, energy_predictions) * input_masks)
-        / valid_inputs
-    )
-
-    return dur_loss, pitch_loss, energy_loss
+    return pitch_avg
 
 
 class KanTtsSAMBERT(nn.Module):
@@ -703,6 +675,14 @@ class KanTtsSAMBERT(nn.Module):
         self.variance_adaptor = VarianceAdaptor(config)
         self.mel_decoder = MelPNCADecoder(config)
         self.mel_postnet = PostNet(config)
+        self.MAS = False
+        if config.get("MAS", False):
+            self.MAS = True
+            self.align_attention = ConvAttention(
+                n_mel_channels=config["num_mels"],
+                n_text_channels=config["embedding_dim"],
+                n_att_channels=config["num_mels"],
+            )
 
     def get_lfr_mask_from_lengths(self, lengths, max_len):
         batch_size = lengths.size(0)
@@ -720,6 +700,20 @@ class KanTtsSAMBERT(nn.Module):
             padded_lr_lengths, max_len=max_len // self.mel_decoder.r
         )
 
+    def binarize_attention_parallel(self, attn, in_lens, out_lens):
+        """For training purposes only. Binarizes attention with MAS.
+           These will no longer recieve a gradient.
+
+        Args:
+            attn: B x 1 x max_mel_len x max_text_len
+        """
+        with torch.no_grad():
+            attn_cpu = attn.data.cpu().numpy()
+            attn_out = b_mas(
+                attn_cpu, in_lens.cpu().numpy(), out_lens.cpu().numpy(), width=1
+            )
+        return torch.from_numpy(attn_out).to(attn.get_device())
+
     def forward(
         self,
         inputs_ling,
@@ -731,15 +725,43 @@ class KanTtsSAMBERT(nn.Module):
         duration_targets=None,
         pitch_targets=None,
         energy_targets=None,
+        attn_priors=None,
     ):
 
         batch_size = inputs_ling.size(0)
 
+        is_training = mel_targets is not None
         input_masks = get_mask_from_lengths(input_lengths, max_len=inputs_ling.size(1))
 
-        text_hid, enc_sla_attn_lst = self.text_encoder(
+        text_hid, enc_sla_attn_lst, ling_embedding = self.text_encoder(
             inputs_ling, input_masks, return_attns=True
         )
+
+        # Monotonic-Alignment-Search
+        if self.MAS and is_training:
+            attn_soft, attn_logprob = self.align_attention(
+                mel_targets.permute(0, 2, 1),
+                ling_embedding.permute(0, 2, 1),
+                input_masks,
+                attn_priors,
+            )
+            attn_hard = self.binarize_attention_parallel(
+                attn_soft, input_lengths, output_lengths
+            )
+            attn_hard_dur = attn_hard.sum(2)[:, 0, :]
+            duration_targets = attn_hard_dur
+            assert torch.all(torch.eq(duration_targets.sum(dim=1), output_lengths))
+            pitch_targets = average_frame_feat(
+                pitch_targets.unsqueeze(1), duration_targets
+            ).squeeze(1)
+            energy_targets = average_frame_feat(
+                energy_targets.unsqueeze(1), duration_targets
+            ).squeeze(1)
+            # Padding the POS length to make it sum equal to max rounded output length
+            for i in range(batch_size):
+                len_item = int(output_lengths[i].item())
+                padding = mel_targets.size(1) - len_item
+                duration_targets[i, input_lengths[i]] = padding
 
         emo_hid = self.emo_tokenizer(inputs_emotion)
         spk_hid = self.spk_tokenizer(inputs_speaker)
@@ -840,11 +862,19 @@ class KanTtsSAMBERT(nn.Module):
             "log_duration_predictions": log_duration_predictions,
             "pitch_predictions": pitch_predictions,
             "energy_predictions": energy_predictions,
+            "duration_targets": duration_targets,
+            "pitch_targets": pitch_targets,
+            "energy_targets": energy_targets,
         }
 
         res["LR_text_outputs"] = LR_text_outputs
         res["LR_emo_outputs"] = LR_emo_outputs
         res["LR_spk_outputs"] = LR_spk_outputs
+
+        if self.MAS and is_training:
+            res["attn_soft"] = attn_soft
+            res["attn_hard"] = attn_hard
+            res["attn_logprob"] = attn_logprob
 
         return res
 
@@ -860,11 +890,11 @@ class KanTtsTextsyBERT(nn.Module):
     def forward(self, inputs_ling, input_lengths):
         res = {}
 
-        input_masks = get_mask_from_lengths(
-            input_lengths, max_len=inputs_ling.size(1))
+        input_masks = get_mask_from_lengths(input_lengths, max_len=inputs_ling.size(1))
 
         text_hid, enc_sla_attn_lst = self.text_encoder(
-            inputs_ling, input_masks, return_attns=True)
+            inputs_ling, input_masks, return_attns=True
+        )
         logits = self.fc(text_hid)
 
         res["logits"] = logits

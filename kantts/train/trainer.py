@@ -148,17 +148,13 @@ class Trainer(object):
         torch.save(state_dict, checkpoint_path)
 
     def load_checkpoint(
-            self,
-            checkpoint_path,
-            restore_training_state=False,
-            strict=True):
+        self, checkpoint_path, restore_training_state=False, strict=True
+    ):
         state_dict = torch.load(checkpoint_path)
         self.model.load_state_dict(state_dict["model"], strict=strict)
         if restore_training_state:
-            self.optimizer.load_state_dict(
-                state_dict["optimizer"])
-            self.scheduler.load_state_dict(
-                state_dict["scheduler"])
+            self.optimizer.load_state_dict(state_dict["optimizer"])
+            self.scheduler.load_state_dict(state_dict["scheduler"])
             self.steps = state_dict["steps"]
 
     #  TODO
@@ -633,14 +629,13 @@ class GAN_Trainer(Trainer):
         torch.save(state_dict, checkpoint_path)
 
     def load_checkpoint(
-            self,
-            checkpoint_path,
-            restore_training_state=False,
-            strict=True):
+        self, checkpoint_path, restore_training_state=False, strict=True
+    ):
         state_dict = torch.load(checkpoint_path, map_location="cpu")
         if not self.distributed:
             self.model["generator"].load_state_dict(
-                state_dict["model"]["generator"], strict=strict)
+                state_dict["model"]["generator"], strict=strict
+            )
         else:
             self.model["generator"].module.load_state_dict(
                 state_dict["model"]["generator"], strict=strict
@@ -648,7 +643,8 @@ class GAN_Trainer(Trainer):
         for model_name in state_dict["model"]["discriminator"]:
             if not self.distributed:
                 self.model["discriminator"][model_name].load_state_dict(
-                    state_dict["model"]["discriminator"][model_name], strict=strict)
+                    state_dict["model"]["discriminator"][model_name], strict=strict
+                )
             else:
                 self.model["discriminator"][model_name].module.load_state_dict(
                     state_dict["model"]["discriminator"][model_name], strict=strict
@@ -664,10 +660,12 @@ class GAN_Trainer(Trainer):
             )
             for model_name in state_dict["optimizer"]["discriminator"].keys():
                 self.optimizer["discriminator"][model_name].load_state_dict(
-                    state_dict["optimizer"]["discriminator"][model_name])
+                    state_dict["optimizer"]["discriminator"][model_name]
+                )
             for model_name in state_dict["scheduler"]["discriminator"].keys():
                 self.scheduler["discriminator"][model_name].load_state_dict(
-                    state_dict["scheduler"]["discriminator"][model_name])
+                    state_dict["scheduler"]["discriminator"][model_name]
+                )
 
 
 class Sambert_Trainer(Trainer):
@@ -708,6 +706,7 @@ class Sambert_Trainer(Trainer):
             log_interval,
             grad_clip,
         )
+        self.with_MAS = config["Model"]["KanTtsSAMBERT"]["params"].get("MAS", False)
 
     @torch.no_grad()
     def genearete_and_save_intermediate_result(self, batch):
@@ -800,9 +799,18 @@ class Sambert_Trainer(Trainer):
         valid_input_lengths = batch["valid_input_lengths"].to(self.device)
         valid_output_lengths = batch["valid_output_lengths"].to(self.device)
         mel_targets = batch["mel_targets"].to(self.device)
-        durations = batch["durations"].to(self.device)
+        durations = (
+            batch["durations"].to(self.device)
+            if batch["durations"] is not None
+            else None
+        )
         pitch_contours = batch["pitch_contours"].to(self.device)
         energy_contours = batch["energy_contours"].to(self.device)
+        attn_priors = (
+            batch["attn_priors"].to(self.device)
+            if batch["attn_priors"] is not None
+            else None
+        )
 
         # generate mel spectrograms
         res = self.model["KanTtsSAMBERT"](
@@ -815,6 +823,7 @@ class Sambert_Trainer(Trainer):
             duration_targets=durations,
             pitch_targets=pitch_contours,
             energy_targets=energy_contours,
+            attn_priors=attn_priors,
         )
 
         x_band_width = res["x_band_width"]
@@ -824,6 +833,9 @@ class Sambert_Trainer(Trainer):
         log_duration_predictions = res["log_duration_predictions"]
         pitch_predictions = res["pitch_predictions"]
         energy_predictions = res["energy_predictions"]
+        duration_targets = res["duration_targets"]
+        pitch_targets = res["pitch_targets"]
+        energy_targets = res["energy_targets"]
 
         mel_loss_, mel_loss = self.criterion["MelReconLoss"](
             valid_output_lengths, mel_targets, dec_outputs, postnet_outputs
@@ -831,14 +843,29 @@ class Sambert_Trainer(Trainer):
 
         dur_loss, pitch_loss, energy_loss = self.criterion["ProsodyReconLoss"](
             valid_input_lengths,
-            durations,
-            pitch_contours,
-            energy_contours,
+            duration_targets,
+            pitch_targets,
+            energy_targets,
             log_duration_predictions,
             pitch_predictions,
             energy_predictions,
         )
         loss_total = mel_loss_ + mel_loss + dur_loss + pitch_loss + energy_loss
+
+        if self.with_MAS:
+            attn_soft = res["attn_soft"]
+            attn_hard = res["attn_hard"]
+            attn_logprob = res["attn_logprob"]
+            attn_ctc_loss = self.criterion["AttentionCTCLoss"](
+                attn_logprob, valid_input_lengths, valid_output_lengths
+            )
+            attn_kl_loss = self.criterion["AttentionBinarizationLoss"](
+                self.epoch, attn_hard, attn_soft
+            )
+
+            loss_total += attn_ctc_loss + attn_kl_loss
+            self.total_eval_loss["eval/attn_ctc_loss"] += attn_ctc_loss.item()
+            self.total_eval_loss["eval/attn_kl_loss"] += attn_kl_loss.item()
 
         self.total_eval_loss["eval/TotalLoss"] += loss_total.item()
         self.total_eval_loss["eval/mel_loss_"] += mel_loss_.item()
@@ -857,9 +884,18 @@ class Sambert_Trainer(Trainer):
         valid_input_lengths = batch["valid_input_lengths"].to(self.device)
         valid_output_lengths = batch["valid_output_lengths"].to(self.device)
         mel_targets = batch["mel_targets"].to(self.device)
-        durations = batch["durations"].to(self.device)
+        durations = (
+            batch["durations"].to(self.device)
+            if batch["durations"] is not None
+            else None
+        )
         pitch_contours = batch["pitch_contours"].to(self.device)
         energy_contours = batch["energy_contours"].to(self.device)
+        attn_priors = (
+            batch["attn_priors"].to(self.device)
+            if batch["attn_priors"] is not None
+            else None
+        )
 
         # generate mel spectrograms
         res = self.model["KanTtsSAMBERT"](
@@ -872,6 +908,7 @@ class Sambert_Trainer(Trainer):
             duration_targets=durations,
             pitch_targets=pitch_contours,
             energy_targets=energy_contours,
+            attn_priors=attn_priors,
         )
 
         x_band_width = res["x_band_width"]
@@ -882,29 +919,39 @@ class Sambert_Trainer(Trainer):
         pitch_predictions = res["pitch_predictions"]
         energy_predictions = res["energy_predictions"]
 
+        duration_targets = res["duration_targets"]
+        pitch_targets = res["pitch_targets"]
+        energy_targets = res["energy_targets"]
+
         mel_loss_, mel_loss = self.criterion["MelReconLoss"](
             valid_output_lengths, mel_targets, dec_outputs, postnet_outputs
         )
 
         dur_loss, pitch_loss, energy_loss = self.criterion["ProsodyReconLoss"](
             valid_input_lengths,
-            durations,
-            pitch_contours,
-            energy_contours,
+            duration_targets,
+            pitch_targets,
+            energy_targets,
             log_duration_predictions,
             pitch_predictions,
             energy_predictions,
         )
         loss_total = mel_loss_ + mel_loss + dur_loss + pitch_loss + energy_loss
-        self.optimizer["KanTtsSAMBERT"].zero_grad()
-        loss_total.backward()
 
-        if self.grad_clip is not None:
-            torch.nn.utils.clip_grad_norm_(
-                self.model["KanTtsSAMBERT"].parameters(), self.grad_clip
+        if self.with_MAS:
+            attn_soft = res["attn_soft"]
+            attn_hard = res["attn_hard"]
+            attn_logprob = res["attn_logprob"]
+            attn_ctc_loss = self.criterion["AttentionCTCLoss"](
+                attn_logprob, valid_input_lengths, valid_output_lengths
             )
-        self.optimizer["KanTtsSAMBERT"].step()
-        self.scheduler["KanTtsSAMBERT"].step()
+            attn_kl_loss = self.criterion["AttentionBinarizationLoss"](
+                self.epoch, attn_hard, attn_soft
+            )
+
+            loss_total += attn_ctc_loss + attn_kl_loss
+            self.total_train_loss["train/attn_ctc_loss"] += attn_ctc_loss.item()
+            self.total_train_loss["train/attn_kl_loss"] += attn_kl_loss.item()
 
         self.total_train_loss["train/TotalLoss"] += loss_total.item()
         self.total_train_loss["train/mel_loss_"] += mel_loss_.item()
@@ -915,6 +962,16 @@ class Sambert_Trainer(Trainer):
         self.total_train_loss["train/batch_size"] += mel_targets.size(0)
         self.total_train_loss["train/x_band_width"] += x_band_width
         self.total_train_loss["train/h_band_width"] += h_band_width
+
+        self.optimizer["KanTtsSAMBERT"].zero_grad()
+        loss_total.backward()
+
+        if self.grad_clip is not None:
+            torch.nn.utils.clip_grad_norm_(
+                self.model["KanTtsSAMBERT"].parameters(), self.grad_clip
+            )
+        self.optimizer["KanTtsSAMBERT"].step()
+        self.scheduler["KanTtsSAMBERT"].step()
 
     def save_checkpoint(self, checkpoint_path):
         if not self.distributed:
@@ -933,23 +990,21 @@ class Sambert_Trainer(Trainer):
         torch.save(state_dict, checkpoint_path)
 
     def load_checkpoint(
-            self,
-            checkpoint_path,
-            restore_training_state=False,
-            strict=True):
+        self, checkpoint_path, restore_training_state=False, strict=True
+    ):
         state_dict = torch.load(checkpoint_path)
         if not self.distributed:
             self.model["KanTtsSAMBERT"].load_state_dict(
-                state_dict["model"], strict=strict)
+                state_dict["model"], strict=strict
+            )
         else:
             self.model["KanTtsSAMBERT"].module.load_state_dict(
-                state_dict["model"], strict=strict)
+                state_dict["model"], strict=strict
+            )
 
         if restore_training_state:
-            self.optimizer["KanTtsSAMBERT"].load_state_dict(
-                state_dict["optimizer"])
-            self.scheduler["KanTtsSAMBERT"].load_state_dict(
-                state_dict["scheduler"])
+            self.optimizer["KanTtsSAMBERT"].load_state_dict(state_dict["optimizer"])
+            self.scheduler["KanTtsSAMBERT"].load_state_dict(state_dict["scheduler"])
             self.steps = state_dict["steps"]
 
 
@@ -1014,7 +1069,8 @@ class Textsy_BERT_Trainer(Trainer):
 
         for layer_id, slf_attn in enumerate(enc_slf_attn_lst):
             for head_id in range(
-                    self.config["Model"]["KanTtsTextsyBERT"]["params"]["encoder_num_heads"]):
+                self.config["Model"]["KanTtsTextsyBERT"]["params"]["encoder_num_heads"]
+            ):
                 fig = plot_alignment(
                     slf_attn[
                         head_id, : valid_input_lengths[0], : valid_input_lengths[0]
@@ -1026,10 +1082,9 @@ class Textsy_BERT_Trainer(Trainer):
                 fig.savefig(
                     os.path.join(
                         dirname,
-                        "enc_slf_attn_dev_layer{}_head{}".format(
-                            layer_id,
-                            head_id),
-                    ))
+                        "enc_slf_attn_dev_layer{}_head{}".format(layer_id, head_id),
+                    )
+                )
 
         target = targets[0].cpu().numpy()
         bert_mask = bert_masks[0].cpu().numpy()
@@ -1112,21 +1167,19 @@ class Textsy_BERT_Trainer(Trainer):
         torch.save(state_dict, checkpoint_path)
 
     def load_checkpoint(
-            self,
-            checkpoint_path,
-            restore_training_state=False,
-            strict=True):
+        self, checkpoint_path, restore_training_state=False, strict=True
+    ):
         state_dict = torch.load(checkpoint_path)
         if not self.distributed:
             self.model["KanTtsTextsyBERT"].load_state_dict(
-                state_dict["model"], strict=strict)
+                state_dict["model"], strict=strict
+            )
         else:
             self.model["KanTtsTextsyBERT"].module.load_state_dict(
-                state_dict["model"], strict=strict)
+                state_dict["model"], strict=strict
+            )
 
         if restore_training_state:
-            self.optimizer["KanTtsTextsyBERT"].load_state_dict(
-                state_dict["optimizer"])
-            self.scheduler["KanTtsTextsyBERT"].load_state_dict(
-                state_dict["scheduler"])
+            self.optimizer["KanTtsTextsyBERT"].load_state_dict(state_dict["optimizer"])
+            self.scheduler["KanTtsTextsyBERT"].load_state_dict(state_dict["scheduler"])
             self.steps = state_dict["steps"]
