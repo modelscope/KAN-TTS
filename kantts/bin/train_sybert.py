@@ -13,8 +13,8 @@ sys.path.insert(0, os.path.dirname(ROOT_PATH))  # NOQA: E402
 try:
     from kantts.models import model_builder
     from kantts.train.loss import criterion_builder
-    from kantts.datasets.dataset import get_am_datasets
-    from kantts.train.trainer import Sambert_Trainer, distributed_init
+    from kantts.datasets.dataset import get_bert_text_datasets
+    from kantts.train.trainer import distributed_init, Textsy_BERT_Trainer
     from kantts.utils.log import logging_to_file, get_git_revision_hash
 except ImportError:
     raise ImportError("Please install kantts.")
@@ -37,7 +37,6 @@ def train(
     root_dir,
     stage_dir,
     resume_path=None,
-    resume_bert_path=None,
     local_rank=0,
 ):
     if not torch.cuda.is_available():
@@ -61,17 +60,15 @@ def train(
     if local_rank == 0 and not os.path.exists(stage_dir):
         os.makedirs(stage_dir)
 
-    audio_config = os.path.join(root_dir[0], "audio_config.yaml")
-    with open(audio_config, "r") as f:
-        config = yaml.load(f, Loader=yaml.Loader)
-
     with open(model_config, "r") as f:
-        config.update(yaml.load(f, Loader=yaml.Loader))
+        config = yaml.load(f, Loader=yaml.Loader)
 
     logging_to_file(os.path.join(stage_dir, "stdout.log"))
 
-    #  TODO: record some info in config, such as create time, git commit revision
-    config["create_time"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+    # TODO: record some info in config, such as create time, git commit
+    # revision
+    config["create_time"] = time.strftime(
+        "%Y-%m-%d %H:%M:%S", time.localtime())
     config["git_revision_hash"] = get_git_revision_hash()
 
     with open(os.path.join(stage_dir, "config.yaml"), "w") as f:
@@ -86,7 +83,7 @@ def train(
 
     #  TODO: abstract dataloader
     # Dataset prepare
-    train_dataset, valid_dataset = get_am_datasets(
+    train_dataset, valid_dataset = get_bert_text_datasets(
         meta_file, root_dir, config, config["allow_cache"]
     )
 
@@ -131,24 +128,25 @@ def train(
 
     ling_unit_size = train_dataset.ling_unit.get_unit_size()
 
-    config["Model"]["KanTtsSAMBERT"]["params"].update(ling_unit_size)
-    model, optimizer, scheduler = model_builder(config, device, local_rank, distributed)
+    config["Model"]["KanTtsTextsyBERT"]["params"].update(ling_unit_size)
+    model, optimizer, scheduler = model_builder(
+        config, device, local_rank, distributed)
 
     criterion = criterion_builder(config, device)
 
-    logging.info(model["KanTtsSAMBERT"])
+    logging.info(model["KanTtsTextsyBERT"])
     logging.info(
-        "Sambert mdoel parameters count: {}".format(
-            count_parameters(model["KanTtsSAMBERT"])
+        "TextsyBERT mdoel parameters count: {}".format(
+            count_parameters(model["KanTtsTextsyBERT"])
         )
     )
 
-    logging.info(optimizer["KanTtsSAMBERT"])
-    logging.info(scheduler["KanTtsSAMBERT"])
+    logging.info(optimizer["KanTtsTextsyBERT"])
+    logging.info(scheduler["KanTtsTextsyBERT"])
     for criterion_ in criterion.values():
         logging.info(criterion_)
 
-    trainer = Sambert_Trainer(
+    trainer = Textsy_BERT_Trainer(
         config=config,
         model=model,
         optimizer=optimizer,
@@ -167,12 +165,8 @@ def train(
     )
 
     if resume_path is not None:
-        trainer.load_checkpoint(resume_path, True, True)
+        trainer.load_checkpoint(resume_path, True)
         logging.info(f"Successfully resumed from {resume_path}.")
-
-    if resume_bert_path is not None:
-        trainer.load_checkpoint(resume_bert_path, False, False)
-        logging.info(f"Successfully resumed from {resume_bert_path}.")
 
     try:
         trainer.train()
@@ -180,14 +174,16 @@ def train(
         logging.error(e, exc_info=True)
         trainer.save_checkpoint(
             os.path.join(
-                os.path.join(stage_dir, "ckpt"), f"checkpoint-{trainer.steps}.pth"
-            )
-        )
+                os.path.join(
+                    stage_dir,
+                    "ckpt"),
+                f"checkpoint-{trainer.steps}.pth"))
         logging.info(f"Successfully saved checkpoint @ {trainer.steps}steps.")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Train a model for speech synthesis")
+    parser = argparse.ArgumentParser(
+        description="Train a model for speech synthesis")
 
     parser.add_argument(
         "--model_config", type=str, required=True, help="model config file"
@@ -206,14 +202,15 @@ if __name__ == "__main__":
         help="stage dir of checkpoint, log and intermidate results ",
     )
     parser.add_argument(
-        "--resume_path", type=str, default=None, help="path to resume checkpoint"
-    )
+        "--resume_path",
+        type=str,
+        default=None,
+        help="path to resume checkpoint")
     parser.add_argument(
-        "--resume_bert_path", type=str, default=None, help="path to resume pretrained-bert checkpoint"
-    )
-    parser.add_argument(
-        "--local_rank", type=int, default=0, help="local rank for distributed training"
-    )
+        "--local_rank",
+        type=int,
+        default=0,
+        help="local rank for distributed training")
     args = parser.parse_args()
 
     train(
@@ -221,6 +218,5 @@ if __name__ == "__main__":
         args.root_dir,
         args.stage_dir,
         args.resume_path,
-        args.resume_bert_path,
         args.local_rank,
     )

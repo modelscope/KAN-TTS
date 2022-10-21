@@ -319,7 +319,8 @@ class TextFftEncoder(nn.Module):
             ling_embedding, masks, return_attns
         )
 
-        enc_output = self.ling_proj(enc_output)
+        if hasattr(self, "ling_proj"):
+            enc_output = self.ling_proj(enc_output)
 
         return enc_output, enc_slf_attn_list
 
@@ -844,5 +845,29 @@ class KanTtsSAMBERT(nn.Module):
         res["LR_text_outputs"] = LR_text_outputs
         res["LR_emo_outputs"] = LR_emo_outputs
         res["LR_spk_outputs"] = LR_spk_outputs
+
+        return res
+
+
+class KanTtsTextsyBERT(nn.Module):
+    def __init__(self, config):
+        super(KanTtsTextsyBERT, self).__init__()
+
+        self.text_encoder = TextFftEncoder(config)
+        delattr(self.text_encoder, "ling_proj")
+        self.fc = nn.Linear(self.text_encoder.d_model, config["sy"])
+
+    def forward(self, inputs_ling, input_lengths):
+        res = {}
+
+        input_masks = get_mask_from_lengths(
+            input_lengths, max_len=inputs_ling.size(1))
+
+        text_hid, enc_sla_attn_lst = self.text_encoder(
+            inputs_ling, input_masks, return_attns=True)
+        logits = self.fc(text_hid)
+
+        res["logits"] = logits
+        res["enc_slf_attn_lst"] = enc_sla_attn_lst
 
         return res

@@ -7,6 +7,7 @@ import librosa
 import numpy as np
 import random
 from tqdm import tqdm
+import math
 from kantts.utils.ling_unit.ling_unit import KanTtsLinguisticUnit
 
 
@@ -512,5 +513,252 @@ def get_am_datasets(
     train_dataset = AM_Dataset(config, train_meta_lst, root_dir, allow_cache)
 
     valid_dataset = AM_Dataset(config, valid_meta_lst, root_dir, allow_cache)
+
+    return train_dataset, valid_dataset
+
+
+class MaskingActor(object):
+    def __init__(self, mask_ratio=0.15):
+        super(MaskingActor, self).__init__()
+        self.mask_ratio = mask_ratio
+        pass
+
+    def _get_random_mask(self, length, p1=0.15):
+        mask = np.random.uniform(0, 1, length)
+        index = 0
+        while index < len(mask):
+            if mask[index] < p1:
+                mask[index] = 1
+            else:
+                mask[index] = 0
+            index += 1
+
+        return mask
+
+    def _input_bert_masking(self, sequence_array, nb_symbol_category,
+                            mask_symbol_id, mask, p2=0.8, p3=0.1, p4=0.1):
+        sequence_array_mask = sequence_array.copy()
+        mask_id = np.where(mask == 1)[0]
+        mask_len = len(mask_id)
+        rand = np.arange(mask_len)
+        np.random.shuffle(rand)
+
+        # [MASK]
+        mask_id_p2 = mask_id[rand[0:int(math.floor(mask_len * p2))]]
+        if len(mask_id_p2) > 0:
+            sequence_array_mask[mask_id_p2] = mask_symbol_id
+
+        # rand
+        mask_id_p3 = mask_id[rand[int(math.floor(
+            mask_len * p2)):int(math.floor(mask_len * p2)) + int(math.floor(mask_len * p3))]]
+        if len(mask_id_p3) > 0:
+            sequence_array_mask[mask_id_p3] = random.randint(
+                0, nb_symbol_category - 1)
+
+        # ori
+        # do nothing
+
+        return sequence_array_mask
+
+
+class BERT_Text_Dataset(torch.utils.data.Dataset):
+    """
+    provide (ling, ling_sy_masked, bert_mask) pair
+    """
+
+    def __init__(
+        self,
+        config,
+        metafile,
+        root_dir,
+        allow_cache=False,
+    ):
+        self.meta = []
+        self.config = config
+
+        if not isinstance(metafile, list):
+            metafile = [metafile]
+        if not isinstance(root_dir, list):
+            root_dir = [root_dir]
+
+        for meta_file, data_dir in zip(metafile, root_dir):
+            if not os.path.exists(meta_file):
+                logging.error("meta file not found: {}".format(meta_file))
+                raise ValueError(
+                    "[BERT_Text_Dataset] meta file: {} not found".format(meta_file)
+                )
+            if not os.path.exists(data_dir):
+                logging.error("data dir not found: {}".format(data_dir))
+                raise ValueError(
+                    "[BERT_Text_Dataset] data dir: {} not found".format(data_dir))
+            self.meta.extend(self.load_meta(meta_file, data_dir))
+
+        self.allow_cache = allow_cache
+
+        self.ling_unit = KanTtsLinguisticUnit(config)
+        self.padder = Padder()
+        self.masking_actor = MaskingActor(self.config["Model"]["KanTtsTextsyBERT"]["params"]["mask_ratio"])
+
+        if allow_cache:
+            self.manager = Manager()
+            self.caches = self.manager.list()
+            self.caches += [() for _ in range(len(self.meta))]
+
+    def __len__(self):
+        return len(self.meta)
+
+    #  TODO: implement __getitem__
+    def __getitem__(self, idx):
+        if self.allow_cache and len(self.caches[idx]) != 0:
+            ling_data = self.caches[idx][0]
+            bert_mask, ling_sy_masked_data = self.bert_masking(ling_data)
+            return (ling_data, ling_sy_masked_data, bert_mask)
+
+        ling_txt = self.meta[idx]
+
+        ling_data = self.ling_unit.encode_symbol_sequence(ling_txt)
+        bert_mask, ling_sy_masked_data = self.bert_masking(ling_data)
+
+        if self.allow_cache:
+            self.caches[idx] = (ling_data,)
+
+        return (ling_data, ling_sy_masked_data, bert_mask)
+
+    def load_meta(self, metafile, data_dir):
+        with open(metafile, "r") as f:
+            lines = f.readlines()
+
+        items = []
+        logging.info("Loading metafile...")
+        for line in tqdm(lines):
+            line = line.strip()
+            index, ling_txt = line.split("\t")
+
+            items.append(
+                (
+                    ling_txt
+                )
+            )
+
+        return items
+
+    @staticmethod
+    def gen_metafile(raw_meta_file, out_dir, split_ratio=0.98):
+        with open(raw_meta_file, "r") as f:
+            lines = f.readlines()
+        random.shuffle(lines)
+        num_train = int(len(lines) * split_ratio) - 1
+        with open(os.path.join(out_dir, "bert_train.lst"), "w") as f:
+            for line in lines[:num_train]:
+                f.write(line)
+
+        with open(os.path.join(out_dir, "bert_valid.lst"), "w") as f:
+            for line in lines[num_train:]:
+                f.write(line)
+
+    def bert_masking(self, ling_data):
+        length = len(ling_data[0])
+        mask = self.masking_actor._get_random_mask(length, p1=self.masking_actor.mask_ratio)
+        mask[-1] = 0
+
+        # sy_masked
+        sy_mask_symbol_id = self.ling_unit.encode_sy([self.ling_unit._mask])[0]
+        ling_sy_masked_data = self.masking_actor._input_bert_masking(
+            ling_data[0],
+            self.ling_unit.get_unit_size()["sy"],
+            sy_mask_symbol_id,
+            mask,
+            p2=0.8,
+            p3=0.1,
+            p4=0.1)
+
+        return (mask, ling_sy_masked_data)
+
+    #  TODO: implement collate_fn
+    def collate_fn(self, batch):
+        data_dict = {}
+
+        max_input_length = max((len(x[0][0]) for x in batch))
+
+        # pure linguistic info: sy|tone|syllable_flag|word_segment
+        # sy
+        lfeat_type = self.ling_unit._lfeat_type_list[0]
+        targets_sy = self.padder._prepare_scalar_inputs(
+            [x[0][0] for x in batch],
+            max_input_length,
+            self.ling_unit._sub_unit_pad[lfeat_type],
+        ).long()
+        # sy masked
+        inputs_sy = self.padder._prepare_scalar_inputs(
+            [x[1] for x in batch],
+            max_input_length,
+            self.ling_unit._sub_unit_pad[lfeat_type],
+        ).long()
+        # tone
+        lfeat_type = self.ling_unit._lfeat_type_list[1]
+        inputs_tone = self.padder._prepare_scalar_inputs(
+            [x[0][1] for x in batch],
+            max_input_length,
+            self.ling_unit._sub_unit_pad[lfeat_type],
+        ).long()
+
+        # syllable_flag
+        lfeat_type = self.ling_unit._lfeat_type_list[2]
+        inputs_syllable_flag = self.padder._prepare_scalar_inputs(
+            [x[0][2] for x in batch],
+            max_input_length,
+            self.ling_unit._sub_unit_pad[lfeat_type],
+        ).long()
+
+        # word_segment
+        lfeat_type = self.ling_unit._lfeat_type_list[3]
+        inputs_ws = self.padder._prepare_scalar_inputs(
+            [x[0][3] for x in batch],
+            max_input_length,
+            self.ling_unit._sub_unit_pad[lfeat_type],
+        ).long()
+
+        data_dict["input_lings"] = torch.stack(
+            [inputs_sy, inputs_tone, inputs_syllable_flag, inputs_ws], dim=2
+        )
+        data_dict["valid_input_lengths"] = torch.as_tensor(
+            [len(x[0][0]) - 1 for x in batch], dtype=torch.long
+        )  # 输入的symbol sequence会在后面拼一个“~”，影响duration计算，所以把length-1
+
+        data_dict["targets"] = targets_sy
+        data_dict["bert_masks"] = self.padder._prepare_scalar_inputs(
+            [x[2]for x in batch], max_input_length, 0.0)
+
+        return data_dict
+
+
+def get_bert_text_datasets(
+    metafile,
+    root_dir,
+    config,
+    allow_cache,
+    split_ratio=0.98,
+):
+    if not isinstance(root_dir, list):
+        root_dir = [root_dir]
+    if not isinstance(metafile, list):
+        metafile = [metafile]
+
+    train_meta_lst = []
+    valid_meta_lst = []
+
+    for raw_metafile, data_dir in zip(metafile, root_dir):
+        train_meta = os.path.join(data_dir, "bert_train.lst")
+        valid_meta = os.path.join(data_dir, "bert_valid.lst")
+        if not os.path.exists(train_meta) or not os.path.exists(valid_meta):
+            BERT_Text_Dataset.gen_metafile(raw_metafile, data_dir, split_ratio)
+        train_meta_lst.append(train_meta)
+        valid_meta_lst.append(valid_meta)
+
+    train_dataset = BERT_Text_Dataset(
+        config, train_meta_lst, root_dir, allow_cache)
+
+    valid_dataset = BERT_Text_Dataset(
+        config, valid_meta_lst, root_dir, allow_cache)
 
     return train_dataset, valid_dataset

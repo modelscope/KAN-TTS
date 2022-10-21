@@ -147,12 +147,18 @@ class Trainer(object):
             os.makedirs(os.path.dirname(checkpoint_path))
         torch.save(state_dict, checkpoint_path)
 
-    def load_checkpoint(self, checkpoint_path, restore_training_state=False):
+    def load_checkpoint(
+            self,
+            checkpoint_path,
+            restore_training_state=False,
+            strict=True):
         state_dict = torch.load(checkpoint_path)
-        self.model.load_state_dict(state_dict["model"])
+        self.model.load_state_dict(state_dict["model"], strict=strict)
         if restore_training_state:
-            self.optimizer.load_state_dict(state_dict["optimizer"])
-            self.scheduler.load_state_dict(state_dict["scheduler"])
+            self.optimizer.load_state_dict(
+                state_dict["optimizer"])
+            self.scheduler.load_state_dict(
+                state_dict["scheduler"])
             self.steps = state_dict["steps"]
 
     #  TODO
@@ -626,22 +632,26 @@ class GAN_Trainer(Trainer):
             os.makedirs(os.path.dirname(checkpoint_path))
         torch.save(state_dict, checkpoint_path)
 
-    def load_checkpoint(self, checkpoint_path, restore_training_state=False):
+    def load_checkpoint(
+            self,
+            checkpoint_path,
+            restore_training_state=False,
+            strict=True):
         state_dict = torch.load(checkpoint_path, map_location="cpu")
         if not self.distributed:
-            self.model["generator"].load_state_dict(state_dict["model"]["generator"])
+            self.model["generator"].load_state_dict(
+                state_dict["model"]["generator"], strict=strict)
         else:
             self.model["generator"].module.load_state_dict(
-                state_dict["model"]["generator"]
+                state_dict["model"]["generator"], strict=strict
             )
         for model_name in state_dict["model"]["discriminator"]:
             if not self.distributed:
                 self.model["discriminator"][model_name].load_state_dict(
-                    state_dict["model"]["discriminator"][model_name]
-                )
+                    state_dict["model"]["discriminator"][model_name], strict=strict)
             else:
                 self.model["discriminator"][model_name].module.load_state_dict(
-                    state_dict["model"]["discriminator"][model_name]
+                    state_dict["model"]["discriminator"][model_name], strict=strict
                 )
 
         if restore_training_state:
@@ -654,12 +664,10 @@ class GAN_Trainer(Trainer):
             )
             for model_name in state_dict["optimizer"]["discriminator"].keys():
                 self.optimizer["discriminator"][model_name].load_state_dict(
-                    state_dict["optimizer"]["discriminator"][model_name]
-                )
+                    state_dict["optimizer"]["discriminator"][model_name])
             for model_name in state_dict["scheduler"]["discriminator"].keys():
                 self.scheduler["discriminator"][model_name].load_state_dict(
-                    state_dict["scheduler"]["discriminator"][model_name]
-                )
+                    state_dict["scheduler"]["discriminator"][model_name])
 
 
 class Sambert_Trainer(Trainer):
@@ -924,14 +932,201 @@ class Sambert_Trainer(Trainer):
             os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
         torch.save(state_dict, checkpoint_path)
 
-    def load_checkpoint(self, checkpoint_path, restore_training_state=False):
+    def load_checkpoint(
+            self,
+            checkpoint_path,
+            restore_training_state=False,
+            strict=True):
         state_dict = torch.load(checkpoint_path)
         if not self.distributed:
-            self.model["KanTtsSAMBERT"].load_state_dict(state_dict["model"])
+            self.model["KanTtsSAMBERT"].load_state_dict(
+                state_dict["model"], strict=strict)
         else:
-            self.model["KanTtsSAMBERT"].module.load_state_dict(state_dict["model"])
+            self.model["KanTtsSAMBERT"].module.load_state_dict(
+                state_dict["model"], strict=strict)
 
         if restore_training_state:
-            self.optimizer["KanTtsSAMBERT"].load_state_dict(state_dict["optimizer"])
-            self.scheduler["KanTtsSAMBERT"].load_state_dict(state_dict["scheduler"])
+            self.optimizer["KanTtsSAMBERT"].load_state_dict(
+                state_dict["optimizer"])
+            self.scheduler["KanTtsSAMBERT"].load_state_dict(
+                state_dict["scheduler"])
+            self.steps = state_dict["steps"]
+
+
+class Textsy_BERT_Trainer(Trainer):
+    def __init__(
+        self,
+        config,
+        model,
+        optimizer,
+        scheduler,
+        criterion,
+        device,
+        sampler,
+        train_loader,
+        valid_loader,
+        max_epochs=None,
+        max_steps=None,
+        save_dir=None,
+        save_interval=1,
+        valid_interval=1,
+        log_interval=10,
+        grad_clip=None,
+    ):
+        super().__init__(
+            config,
+            model,
+            optimizer,
+            scheduler,
+            criterion,
+            device,
+            sampler,
+            train_loader,
+            valid_loader,
+            max_epochs,
+            max_steps,
+            save_dir,
+            save_interval,
+            valid_interval,
+            log_interval,
+            grad_clip,
+        )
+
+    @torch.no_grad()
+    def genearete_and_save_intermediate_result(self, batch):
+        inputs_ling = batch["input_lings"].to(self.device)
+        valid_input_lengths = batch["valid_input_lengths"].to(self.device)
+        bert_masks = batch["bert_masks"].to(self.device)
+        targets = batch["targets"].to(self.device)
+
+        res = self.model["KanTtsTextsyBERT"](
+            inputs_ling[0:1],
+            valid_input_lengths[0:1],
+        )
+
+        logits = res["logits"]
+        enc_slf_attn_lst = res["enc_slf_attn_lst"]
+        preds = torch.argmax(logits, dim=-1).contiguous().view(-1)
+
+        dirname = os.path.join(self.log_dir, f"predictions/{self.steps}steps")
+        if not os.path.exists(dirname):
+            os.makedirs(dirname)
+
+        for layer_id, slf_attn in enumerate(enc_slf_attn_lst):
+            for head_id in range(
+                    self.config["Model"]["KanTtsTextsyBERT"]["params"]["encoder_num_heads"]):
+                fig = plot_alignment(
+                    slf_attn[
+                        head_id, : valid_input_lengths[0], : valid_input_lengths[0]
+                    ]
+                    .cpu()
+                    .numpy(),
+                    info="valid_len_{}".format(valid_input_lengths[0].item()),
+                )
+                fig.savefig(
+                    os.path.join(
+                        dirname,
+                        "enc_slf_attn_dev_layer{}_head{}".format(
+                            layer_id,
+                            head_id),
+                    ))
+
+        target = targets[0].cpu().numpy()
+        bert_mask = bert_masks[0].cpu().numpy()
+        pred = preds.cpu().numpy()
+        np.save(os.path.join(dirname, "pred.npy"), pred)
+        np.save(os.path.join(dirname, "target.npy"), target)
+        np.save(os.path.join(dirname, "bert_mask.npy"), bert_mask)
+
+    @torch.no_grad()
+    def eval_step(self, batch):
+        inputs_ling = batch["input_lings"].to(self.device)
+        valid_input_lengths = batch["valid_input_lengths"].to(self.device)
+        bert_masks = batch["bert_masks"].to(self.device)
+        targets = batch["targets"].to(self.device)
+
+        res = self.model["KanTtsTextsyBERT"](
+            inputs_ling,
+            valid_input_lengths,
+        )
+
+        logits = res["logits"]
+        loss_total, err = self.criterion["SeqCELoss"](
+            logits,
+            targets,
+            bert_masks,
+        )
+        loss_total = loss_total / logits.size(-1)
+
+        self.total_eval_loss["eval/TotalLoss"] += loss_total.item()
+        self.total_eval_loss["eval/Error"] += err.item()
+        self.total_eval_loss["eval/batch_size"] += targets.size(0)
+
+    def train_step(self, batch):
+        inputs_ling = batch["input_lings"].to(self.device)
+        valid_input_lengths = batch["valid_input_lengths"].to(self.device)
+        bert_masks = batch["bert_masks"].to(self.device)
+        targets = batch["targets"].to(self.device)
+
+        res = self.model["KanTtsTextsyBERT"](
+            inputs_ling,
+            valid_input_lengths,
+        )
+
+        logits = res["logits"]
+        loss_total, err = self.criterion["SeqCELoss"](
+            logits,
+            targets,
+            bert_masks,
+        )
+        loss_total = loss_total / logits.size(-1)
+
+        self.optimizer["KanTtsTextsyBERT"].zero_grad()
+        loss_total.backward()
+
+        if self.grad_clip is not None:
+            torch.nn.utils.clip_grad_norm_(
+                self.model["KanTtsTextsyBERT"].parameters(), self.grad_clip
+            )
+        self.optimizer["KanTtsTextsyBERT"].step()
+        self.scheduler["KanTtsTextsyBERT"].step()
+
+        self.total_train_loss["train/TotalLoss"] += loss_total.item()
+        self.total_train_loss["train/Error"] += err.item()
+        self.total_train_loss["train/batch_size"] += targets.size(0)
+
+    def save_checkpoint(self, checkpoint_path):
+        if not self.distributed:
+            model_state = self.model["KanTtsTextsyBERT"].state_dict()
+        else:
+            model_state = self.model["KanTtsTextsyBERT"].module.state_dict()
+        state_dict = {
+            "optimizer": self.optimizer["KanTtsTextsyBERT"].state_dict(),
+            "scheduler": self.scheduler["KanTtsTextsyBERT"].state_dict(),
+            "steps": self.steps,
+            "model": model_state,
+        }
+
+        if not os.path.exists(checkpoint_path):
+            os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
+        torch.save(state_dict, checkpoint_path)
+
+    def load_checkpoint(
+            self,
+            checkpoint_path,
+            restore_training_state=False,
+            strict=True):
+        state_dict = torch.load(checkpoint_path)
+        if not self.distributed:
+            self.model["KanTtsTextsyBERT"].load_state_dict(
+                state_dict["model"], strict=strict)
+        else:
+            self.model["KanTtsTextsyBERT"].module.load_state_dict(
+                state_dict["model"], strict=strict)
+
+        if restore_training_state:
+            self.optimizer["KanTtsTextsyBERT"].load_state_dict(
+                state_dict["optimizer"])
+            self.scheduler["KanTtsTextsyBERT"].load_state_dict(
+                state_dict["scheduler"])
             self.steps = state_dict["steps"]

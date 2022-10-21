@@ -421,6 +421,24 @@ class MultiResolutionSTFTLoss(torch.nn.Module):
         return sc_loss, mag_loss
 
 
+class SeqCELoss(torch.nn.Module):
+    def __init__(self, loss_type="ce"):
+        super(SeqCELoss, self).__init__()
+        self.loss_type = loss_type
+        self.criterion = torch.nn.CrossEntropyLoss(reduction="none")
+
+    def forward(self, logits, targets, masks):
+        loss = self.criterion(logits.contiguous(
+        ).view(-1, logits.size(-1)), targets.contiguous().view(-1))
+        preds = torch.argmax(logits, dim=-1).contiguous().view(-1)
+        masks = masks.contiguous().view(-1)
+
+        loss = (loss * masks).sum() / masks.sum()
+        err = torch.sum((preds != targets.view(-1)) * masks) / masks.sum()
+
+        return loss, err
+
+
 #  TODO: create a mapping for new loss functions
 loss_dict = {
     "generator_adv_loss": GeneratorAdversarialLoss,
@@ -431,6 +449,7 @@ loss_dict = {
     "feat_match_loss": FeatureMatchLoss,
     "MelReconLoss": MelReconLoss,
     "ProsodyReconLoss": ProsodyReconLoss,
+    "SeqCELoss": SeqCELoss,
 }
 
 

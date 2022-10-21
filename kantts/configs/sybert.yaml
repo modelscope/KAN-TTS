@@ -1,0 +1,69 @@
+model_type: sybert
+Model:
+#########################################################
+#         TextsyBERT NETWORK ARCHITECTURE SETTING          #
+#########################################################
+  KanTtsTextsyBERT:
+    params:
+        max_len: 800
+
+        embedding_dim: 512
+        encoder_num_layers: 8
+        encoder_num_heads: 8
+        encoder_num_units: 128
+        encoder_ffn_inner_dim: 1024
+        encoder_dropout: 0.1
+        encoder_attention_dropout: 0.1
+        encoder_relu_dropout: 0.1
+        encoder_projection_units: 32
+        
+        mask_ratio: 0.3
+
+    optimizer:
+      type: Adam
+      params:
+        lr: 0.0001
+        betas: [0.9, 0.98]
+        eps: 1.0e-9
+        weight_decay: 0.0
+    scheduler:
+      type: NoamLR
+      params:
+        warmup_steps: 10000
+
+linguistic_unit:
+  cleaners: english_cleaners
+  lfeat_type_list: sy,tone,syllable_flag,word_segment,emo_category,speaker_category
+  speaker_list: F7
+####################################################
+#                   LOSS SETTING                   #
+####################################################
+Loss:
+  SeqCELoss:
+    enable: True
+    params:
+      loss_type: ce
+
+###########################################################
+#                  DATA LOADER SETTING                    #
+###########################################################
+batch_size: 32
+pin_memory: False
+num_workers: 4 # FIXME: set > 0 may stuck on macos
+remove_short_samples: False
+allow_cache: True
+
+grad_norm: 1.0
+
+###########################################################
+#                    INTERVAL SETTING                     #
+###########################################################
+train_max_steps: 1000000           # Number of training steps.
+save_interval_steps: 20000         # Interval steps to save checkpoint.
+eval_interval_steps: 10000          # Interval steps to evaluate the network.
+log_interval_steps: 1000            # Interval steps to record the training log.
+
+###########################################################
+#                     OTHER SETTING                       #
+###########################################################
+num_save_intermediate_results: 4  # Number of results to be saved as intermediate results.

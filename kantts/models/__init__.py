@@ -8,7 +8,10 @@ from kantts.models.hifigan.hifigan import (  # NOQA
 )
 import kantts
 import kantts.train.scheduler
-from kantts.models.sambert.kantts_sambert import KanTtsSAMBERT  # NOQA
+from kantts.models.sambert.kantts_sambert import (
+    KanTtsSAMBERT,  # NOQA
+    KanTtsTextsyBERT
+)
 from .pqmf import PQMF
 
 
@@ -113,10 +116,38 @@ def sambert_model_builder(config, device, rank, distributed):
     return model, optimizer, scheduler
 
 
+def sybert_model_builder(config, device, rank, distributed):
+    model = {}
+    optimizer = {}
+    scheduler = {}
+
+    model["KanTtsTextsyBERT"] = KanTtsTextsyBERT(
+        config["Model"]["KanTtsTextsyBERT"]["params"]
+    ).to(device)
+    optimizer["KanTtsTextsyBERT"] = optimizer_builder(
+        model["KanTtsTextsyBERT"].parameters(),
+        config["Model"]["KanTtsTextsyBERT"]["optimizer"].get("type", "Adam"),
+        config["Model"]["KanTtsTextsyBERT"]["optimizer"].get("params", {}),
+    )
+    scheduler["KanTtsTextsyBERT"] = scheduler_builder(
+        optimizer["KanTtsTextsyBERT"],
+        config["Model"]["KanTtsTextsyBERT"]["scheduler"].get("type", "StepLR"),
+        config["Model"]["KanTtsTextsyBERT"]["scheduler"].get("params", {}),
+    )
+
+    if distributed:
+        model["KanTtsTextsyBERT"] = DistributedDataParallel(
+            model["KanTtsTextsyBERT"], device_ids=[rank], output_device=rank
+        )
+
+    return model, optimizer, scheduler
+
+
 #  TODO: implement a builder for specific model
 model_dict = {
     "hifigan": hifigan_model_builder,
     "sambert": sambert_model_builder,
+    "sybert": sybert_model_builder,
 }
 
 
