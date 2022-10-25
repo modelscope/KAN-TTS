@@ -4,6 +4,10 @@ import argparse
 import yaml
 import logging
 import zipfile
+from glob import glob
+import soundfile as sf
+import numpy as np
+
 
 ROOT_PATH = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # NOQA: E402
 sys.path.insert(0, os.path.dirname(ROOT_PATH))  # NOQA: E402
@@ -23,10 +27,54 @@ logging.basicConfig(
 )
 
 
+def concat_process(chunked_dir, output_dir):
+    wav_files = sorted(glob(os.path.join(chunked_dir, "*.wav")))
+    print(wav_files)
+    sentence_sil = 0.28  # seconds
+    end_sil = 0.05  # seconds
+
+    cnt = 0
+    wav_concat = None
+    main_id, sub_id = 0, 0
+
+    while cnt < len(wav_files):
+        wav_file = os.path.join(
+            chunked_dir, "{}_{}_mel_gen.wav".format(main_id, sub_id)
+        )
+        if os.path.exists(wav_file):
+            wav, sr = sf.read(wav_file)
+            sentence_sil_samples = int(sentence_sil * sr)
+            end_sil_samples = int(end_sil * sr)
+            if sub_id == 0:
+                wav_concat = wav
+            else:
+                wav_concat = np.concatenate(
+                    (wav_concat, np.zeros(sentence_sil_samples), wav), axis=0
+                )
+
+            sub_id += 1
+            cnt += 1
+        else:
+            if wav_concat is not None:
+                wav_concat = np.concatenate(
+                    (wav_concat, np.zeros(end_sil_samples)), axis=0
+                )
+                sf.write(os.path.join(output_dir, f"{main_id}.wav"), wav_concat, sr)
+
+            main_id += 1
+            sub_id = 0
+            wav_concat = None
+
+        if cnt == len(wav_files):
+            wav_concat = np.concatenate((wav_concat, np.zeros(end_sil_samples)), axis=0)
+            sf.write(os.path.join(output_dir, f"{main_id}.wav"), wav_concat, sr)
+
+
 def text_to_wav(
     text_file, output_dir, resources_zip_file, am_ckpt, voc_ckpt, speaker=None
 ):
     os.makedirs(output_dir, exist_ok=True)
+    os.makedirs(os.path.join(output_dir, "res_wavs"), exist_ok=True)
 
     resource_root_dir = os.path.dirname(resources_zip_file)
     resource_dir = os.path.join(resource_root_dir, "resource")
@@ -56,6 +104,8 @@ def text_to_wav(
 
     logging.info("Vocoder is infering...")
     hifigan_infer(os.path.join(output_dir, "feat"), voc_ckpt, output_dir)
+
+    concat_process(output_dir, os.path.join(output_dir, "res_wavs"))
 
     logging.info("Text to wav finished!")
 
