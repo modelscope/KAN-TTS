@@ -779,15 +779,6 @@ class AudioProcessor:
                 logging.error("[AudioProcessor] duration_generate failed, exit")
                 return False
 
-            succeed = self.trim_silence_wav_with_interval(
-                normed_wav_dir, out_duration_dir, trimmed_wav_dir
-            )
-            if not succeed:
-                logging.error(
-                    "[AudioProcessor] trim_silence_wav_with_interval failed, exit"
-                )
-                return False
-
         succeed = self.mel_extract(normed_wav_dir, out_mel_dir)
         if not succeed:
             logging.error("[AudioProcessor] mel_extract failed, exit")
@@ -795,7 +786,20 @@ class AudioProcessor:
 
         if self.trim_silence:
             feat_wav_dir = trimmed_wav_dir
-            self.trim_silence_wav(normed_wav_dir, feat_wav_dir)
+            if with_duration:
+                succeed = self.trim_silence_wav_with_interval(
+                    normed_wav_dir, out_duration_dir, feat_wav_dir
+                )
+                if not succeed:
+                    logging.error(
+                        "[AudioProcessor] trim_silence_wav_with_interval failed, exit"
+                    )
+                    return False
+            else:
+                succeed = self.trim_silence_wav(normed_wav_dir, feat_wav_dir)
+                if not succeed:
+                    logging.error("[AudioProcessor] trim_silence_wav failed, exit")
+                    return False
             self.trim_mel_extract(feat_wav_dir, out_trim_mel_dir)
         else:
             feat_wav_dir = normed_wav_dir
