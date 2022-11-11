@@ -76,12 +76,11 @@ class AudioProcessor:
         for key in self.config:
             setattr(self, key, self.config[key])
 
-        self.badcase_list = {}
+        self.min_wav_length = int(self.config["sampling_rate"] * 0.5)
 
+        self.badcase_list = []
         self.pcm_dict = {}
-        self.trim_pcm_dict = {}
         self.mel_dict = {}
-        self.trim_mel_dict = {}
         self.f0_dict = {}
         self.uv_dict = {}
         self.nccf_dict = {}
@@ -169,8 +168,8 @@ class AudioProcessor:
 
             #  Align with mel frames
             durs = np.array(cali_duration)
-            if len(self.trim_mel_dict) > 0:
-                pair_mel = self.trim_mel_dict.get(index, None)
+            if len(self.mel_dict) > 0:
+                pair_mel = self.mel_dict.get(index, None)
                 if pair_mel is None:
                     logging.warning(
                         "[AudioProcessor] Interval file %s  has no corresponding mel",
@@ -190,7 +189,7 @@ class AudioProcessor:
                         index,
                         durs[-2],
                     )
-                    self.badcase_list[index] = 1
+                    self.badcase_list.append(index)
                     continue
 
             self.dur_dict[index] = durs
@@ -225,83 +224,95 @@ class AudioProcessor:
                 wav_name = os.path.splitext(os.path.basename(wav_path))[0]
                 futures.append((future, wav_name))
             for future, wav_name in futures:
-                self.pcm_dict[wav_name] = future.result()
+                pcm = future.result()
+                if len(pcm) < self.min_wav_length:
+                    logging.warning("[AudioProcessor] %s is too short, skip", wav_name)
+                    self.badcase_list.append(wav_name)
+                    continue
+                self.pcm_dict[wav_name] = pcm
 
         return self.pcm_dict
 
-    def trim_silence_wav(self, src_wav_dir, out_wav_dir):
+    def trim_silence_wav(self, src_wav_dir, out_wav_dir=None):
         wav_list = glob(os.path.join(src_wav_dir, "*.wav"))
-        if self.trim_silence:
-            logging.info("[AudioProcessor] Trim silence started")
-            os.makedirs(out_wav_dir, exist_ok=True)
-            pcm_dict = self.get_pcm_dict(src_wav_dir)
-            with ProcessPoolExecutor(max_workers=self.num_workers) as executor, tqdm(
-                total=len(wav_list)
-            ) as progress:
-                futures = []
-                for wav_basename, pcm_data in pcm_dict.items():
-                    future = executor.submit(
-                        trim_silence,
-                        pcm_data,
-                        self.trim_silence_threshold_db,
-                        self.hop_length,
-                        self.win_length,
-                    )
-                    future.add_done_callback(lambda p: progress.update())
-                    futures.append((future, wav_basename))
-            # TODO: multi-processing
-            for future, wav_basename in tqdm(futures):
-                self.trim_pcm_dict[wav_basename] = future.result()
-                save_wav(
-                    self.trim_pcm_dict[wav_basename],
-                    os.path.join(out_wav_dir, wav_basename + ".wav"),
-                    self.sampling_rate,
-                )
-
-            logging.info("[AudioProcessor] Trim silence finished")
-            return True
+        logging.info("[AudioProcessor] Trim silence started")
+        if out_wav_dir is None:
+            out_wav_dir = src_wav_dir
         else:
-            logging.info("[AudioProcessor] No trim silence")
-            os.symlink(src_wav_dir, out_wav_dir, target_is_directory=True)
-            return True
+            os.makedirs(out_wav_dir, exist_ok=True)
+        pcm_dict = self.get_pcm_dict(src_wav_dir)
+        with ProcessPoolExecutor(max_workers=self.num_workers) as executor, tqdm(
+            total=len(wav_list)
+        ) as progress:
+            futures = []
+            for wav_basename, pcm_data in pcm_dict.items():
+                future = executor.submit(
+                    trim_silence,
+                    pcm_data,
+                    self.trim_silence_threshold_db,
+                    self.hop_length,
+                    self.win_length,
+                )
+                future.add_done_callback(lambda p: progress.update())
+                futures.append((future, wav_basename))
+        # TODO: multi-processing
+        for future, wav_basename in tqdm(futures):
+            pcm = future.result()
+            if len(pcm) < self.min_wav_length:
+                logging.warning("[AudioProcessor] %s is too short, skip", wav_basename)
+                self.badcase_list.append(wav_basename)
+                self.pcm_dict.pop(wav_basename)
+                continue
+            self.pcm_dict[wav_basename] = pcm
+            save_wav(
+                self.pcm_dict[wav_basename],
+                os.path.join(out_wav_dir, wav_basename + ".wav"),
+                self.sampling_rate,
+            )
 
-    def trim_silence_wav_with_interval(self, src_wav_dir, dur_dir, out_wav_dir):
+        logging.info("[AudioProcessor] Trim silence finished")
+        return True
+
+    def trim_silence_wav_with_interval(self, src_wav_dir, dur_dir, out_wav_dir=None):
         wav_list = glob(os.path.join(src_wav_dir, "*.wav"))
-        if self.trim_silence:
-            logging.info("[AudioProcessor] Trim silence with interval started")
-            os.makedirs(out_wav_dir, exist_ok=True)
-            pcm_dict = self.get_pcm_dict(src_wav_dir)
-            with ProcessPoolExecutor(max_workers=self.num_workers) as executor, tqdm(
-                total=len(wav_list)
-            ) as progress:
-                futures = []
-                for wav_basename, pcm_data in pcm_dict.items():
-                    future = executor.submit(
-                        trim_silence_with_interval,
-                        pcm_data,
-                        self.dur_dict.get(wav_basename, None),
-                        self.hop_length,
-                    )
-                    future.add_done_callback(lambda p: progress.update())
-                    futures.append((future, wav_basename))
-            # TODO: multi-processing
-            for future, wav_basename in tqdm(futures):
-                trimed_pcm = future.result()
-                if trimed_pcm is None:
-                    continue
-                self.trim_pcm_dict[wav_basename] = trimed_pcm
-                save_wav(
-                    self.trim_pcm_dict[wav_basename],
-                    os.path.join(out_wav_dir, wav_basename + ".wav"),
-                    self.sampling_rate,
-                )
-
-            logging.info("[AudioProcessor] Trim silence finished")
-            return True
+        logging.info("[AudioProcessor] Trim silence with interval started")
+        if out_wav_dir is None:
+            out_wav_dir = src_wav_dir
         else:
-            logging.info("[AudioProcessor] No trim silence")
-            os.symlink(src_wav_dir, out_wav_dir, target_is_directory=True)
-            return True
+            os.makedirs(out_wav_dir, exist_ok=True)
+        pcm_dict = self.get_pcm_dict(src_wav_dir)
+        with ProcessPoolExecutor(max_workers=self.num_workers) as executor, tqdm(
+            total=len(wav_list)
+        ) as progress:
+            futures = []
+            for wav_basename, pcm_data in pcm_dict.items():
+                future = executor.submit(
+                    trim_silence_with_interval,
+                    pcm_data,
+                    self.dur_dict.get(wav_basename, None),
+                    self.hop_length,
+                )
+                future.add_done_callback(lambda p: progress.update())
+                futures.append((future, wav_basename))
+        # TODO: multi-processing
+        for future, wav_basename in tqdm(futures):
+            trimed_pcm = future.result()
+            if trimed_pcm is None:
+                continue
+            if len(trimed_pcm) < self.min_wav_length:
+                logging.warning("[AudioProcessor] %s is too short, skip", wav_basename)
+                self.badcase_list.append(wav_basename)
+                self.pcm_dict.pop(wav_basename)
+                continue
+            self.pcm_dict[wav_basename] = trimed_pcm
+            save_wav(
+                self.pcm_dict[wav_basename],
+                os.path.join(out_wav_dir, wav_basename + ".wav"),
+                self.sampling_rate,
+            )
+
+        logging.info("[AudioProcessor] Trim silence finished")
+        return True
 
     def mel_extract(self, src_wav_dir, out_feature_dir):
         os.makedirs(out_feature_dir, exist_ok=True)
@@ -342,7 +353,7 @@ class AudioProcessor:
                         "[AudioProcessor] Melspec extraction failed for %s",
                         wav_basename,
                     )
-                    self.badcase_list[wav_basename] = 1
+                    self.badcase_list.append(wav_basename)
                 else:
                     melspec = result
                     self.mel_dict[wav_basename] = melspec
@@ -375,85 +386,6 @@ class AudioProcessor:
 
         return True
 
-    def trim_mel_extract(self, src_wav_dir, out_feature_dir):
-        os.makedirs(out_feature_dir, exist_ok=True)
-        wav_list = glob(os.path.join(src_wav_dir, "*.wav"))
-        if self.trim_silence:
-            pcm_dict = self.trim_pcm_dict
-        else:
-            return
-
-        logging.info("[AudioProcessor] Trimmed Melspec extraction started")
-
-        # Get global normed mel spec
-        with ProcessPoolExecutor(max_workers=self.num_workers) as executor, tqdm(
-            total=len(wav_list)
-        ) as progress:
-            futures = []
-            for wav_basename, pcm_data in pcm_dict.items():
-                future = executor.submit(
-                    melspectrogram,
-                    pcm_data,
-                    self.sampling_rate,
-                    self.n_fft,
-                    self.hop_length,
-                    self.win_length,
-                    self.n_mels,
-                    self.max_norm,
-                    self.min_level_db,
-                    self.ref_level_db,
-                    self.fmin,
-                    self.fmax,
-                    self.symmetric,
-                    self.preemphasize,
-                )
-                future.add_done_callback(lambda p: progress.update())
-                futures.append((future, wav_basename))
-
-            for future, wav_basename in futures:
-                result = future.result()
-                if result is None:
-                    logging.warning(
-                        "[AudioProcessor] Trim Melspec extraction failed for %s",
-                        wav_basename,
-                    )
-                    self.badcase_list[wav_basename] = 1
-                else:
-                    melspec = result
-                    self.trim_mel_dict[wav_basename] = melspec
-
-        logging.info("[AudioProcessor] Trim Melspec extraction finished")
-
-        #  FIXME: is this step necessary?
-        #  Do mean std norm on global-normed melspec
-        logging.info("Melspec statistic proceeding...")
-        mel_mean = compute_mean(list(self.trim_mel_dict.values()), dims=self.n_mels)
-        mel_std = compute_std(
-            list(self.trim_mel_dict.values()), mel_mean, dims=self.n_mels
-        )
-        logging.info("Melspec statistic done")
-        np.savetxt(os.path.join(out_feature_dir, "mel_mean.txt"), mel_mean, fmt="%.6f")
-        np.savetxt(os.path.join(out_feature_dir, "mel_std.txt"), mel_std, fmt="%.6f")
-        logging.info(
-            "[AudioProcessor] melspec mean and std saved to:\n{},\n{}".format(
-                os.path.join(out_feature_dir, "mel_mean.txt"),
-                os.path.join(out_feature_dir, "mel_std.txt"),
-            )
-        )
-
-        logging.info("[AudioProcessor] Trimmed melspec mean std norm is proceeding...")
-        for wav_basename in self.trim_mel_dict:
-            melspec = self.trim_mel_dict[wav_basename]
-            norm_melspec = norm_mean_std(melspec, mel_mean, mel_std)
-            np.save(os.path.join(out_feature_dir, wav_basename + ".npy"), norm_melspec)
-
-        logging.info("[AudioProcessor] Trim Melspec normalization finished")
-        logging.info(
-            "[AudioProcessor] Trimmed Normed Melspec saved to %s", out_feature_dir
-        )
-
-        return True
-
     #  TODO: some dataset may have no interval label
     def duration_generate(self, src_interval_dir, out_feature_dir):
         os.makedirs(out_feature_dir, exist_ok=True)
@@ -483,7 +415,7 @@ class AudioProcessor:
                     logging.warning(
                         "[AudioProcessor] Duration generate failed for %s", wav_basename
                     )
-                    self.badcase_list[wav_basename] = 1
+                    self.badcase_list.append(wav_basename)
                 else:
                     durs, phone_list = result
                     #  Algin length with melspec
@@ -508,7 +440,7 @@ class AudioProcessor:
                                 wav_basename,
                                 durs[-1],
                             )
-                            self.badcase_list[wav_basename] = 1
+                            self.badcase_list.append(wav_basename)
                             continue
 
                     self.dur_dict[wav_basename] = durs
@@ -522,15 +454,15 @@ class AudioProcessor:
 
         return True
 
-    def pitch_extract(self, src_wav_dir, out_feature_dir):
-        os.makedirs(out_feature_dir, exist_ok=True)
+    def pitch_extract(
+        self, src_wav_dir, out_f0_dir, out_frame_f0_dir, out_frame_uv_dir
+    ):
+        os.makedirs(out_f0_dir, exist_ok=True)
+        os.makedirs(out_frame_f0_dir, exist_ok=True)
+        os.makedirs(out_frame_uv_dir, exist_ok=True)
         wav_list = glob(os.path.join(src_wav_dir, "*.wav"))
-        if self.trim_silence:
-            pcm_dict = self.trim_pcm_dict
-            mel_dict = self.trim_mel_dict
-        else:
-            pcm_dict = self.get_pcm_dict(src_wav_dir)
-            mel_dict = self.mel_dict
+        pcm_dict = self.get_pcm_dict(src_wav_dir)
+        mel_dict = self.mel_dict
 
         logging.info("[AudioProcessor] Pitch extraction started")
         # Get raw pitch
@@ -555,7 +487,7 @@ class AudioProcessor:
                     logging.warning(
                         "[AudioProcessor] Pitch extraction failed for %s", wav_basename
                     )
-                    self.badcase_list[wav_basename] = 1
+                    self.badcase_list.append(wav_basename)
                 else:
                     f0, uv, f0uv = result
                     if len(mel_dict) > 0:
@@ -568,32 +500,47 @@ class AudioProcessor:
                             "[AudioProcessor] Pitch length mismatch with mel in %s",
                             wav_basename,
                         )
-                        self.badcase_list[wav_basename] = 1
+                        self.badcase_list.append(wav_basename)
                         continue
                     self.f0_dict[wav_basename] = f0
                     self.uv_dict[wav_basename] = uv
                     self.f0uv_dict[wav_basename] = f0uv
-        # TODO: perhpas some developers want to use raw f0
-        #  save raw f0 to a specific dir
 
         #  Normalize f0
         logging.info("[AudioProcessor] Pitch normalization is proceeding...")
         f0_mean = compute_mean(list(self.f0uv_dict.values()), dims=1)
         f0_std = compute_std(list(self.f0uv_dict.values()), f0_mean, dims=1)
-        np.savetxt(os.path.join(out_feature_dir, "f0_mean.txt"), f0_mean, fmt="%.6f")
-        np.savetxt(os.path.join(out_feature_dir, "f0_std.txt"), f0_std, fmt="%.6f")
+        np.savetxt(os.path.join(out_f0_dir, "f0_mean.txt"), f0_mean, fmt="%.6f")
+        np.savetxt(os.path.join(out_f0_dir, "f0_std.txt"), f0_std, fmt="%.6f")
         logging.info(
             "[AudioProcessor] f0 mean and std saved to:\n{},\n{}".format(
-                os.path.join(out_feature_dir, "f0_mean.txt"),
-                os.path.join(out_feature_dir, "f0_std.txt"),
+                os.path.join(out_f0_dir, "f0_mean.txt"),
+                os.path.join(out_f0_dir, "f0_std.txt"),
             )
         )
-
         logging.info("[AudioProcessor] Pitch mean std norm is proceeding...")
         for wav_basename in self.f0uv_dict:
             f0 = self.f0uv_dict[wav_basename]
             norm_f0 = f0_norm_mean_std(f0, f0_mean, f0_std)
             self.f0uv_dict[wav_basename] = norm_f0
+
+        for wav_basename in self.f0_dict:
+            f0 = self.f0_dict[wav_basename]
+            norm_f0 = f0_norm_mean_std(f0, f0_mean, f0_std)
+            self.f0_dict[wav_basename] = norm_f0
+
+        #  save frame f0 to a specific dir
+        for wav_basename in self.f0_dict:
+            np.save(
+                os.path.join(out_frame_f0_dir, wav_basename + ".npy"),
+                self.f0_dict[wav_basename].reshape(-1),
+            )
+
+        for wav_basename in self.uv_dict:
+            np.save(
+                os.path.join(out_frame_uv_dir, wav_basename + ".npy"),
+                self.uv_dict[wav_basename].reshape(-1),
+            )
 
         #  phone level average
         #  if there is no duration then save the frame-level f0
@@ -619,32 +566,29 @@ class AudioProcessor:
                             "[AudioProcessor] Pitch extraction failed in phone level avg for: %s",
                             wav_basename,
                         )
-                        self.badcase_list[wav_basename] = 1
+                        self.badcase_list.append(wav_basename)
                     else:
                         avg_f0 = result
                         self.f0uv_dict[wav_basename] = avg_f0
 
         for wav_basename in self.f0uv_dict:
             np.save(
-                os.path.join(out_feature_dir, wav_basename + ".npy"),
+                os.path.join(out_f0_dir, wav_basename + ".npy"),
                 self.f0uv_dict[wav_basename].reshape(-1),
             )
 
         logging.info("[AudioProcessor] Pitch normalization finished")
-        logging.info("[AudioProcessor] Normed f0 saved to %s", out_feature_dir)
+        logging.info("[AudioProcessor] Normed f0 saved to %s", out_f0_dir)
         logging.info("[AudioProcessor] Pitch extraction finished")
 
         return True
 
-    def energy_extract(self, src_wav_dir, out_feature_dir):
-        os.makedirs(out_feature_dir, exist_ok=True)
+    def energy_extract(self, src_wav_dir, out_energy_dir, out_frame_energy_dir):
+        os.makedirs(out_energy_dir, exist_ok=True)
+        os.makedirs(out_frame_energy_dir, exist_ok=True)
         wav_list = glob(os.path.join(src_wav_dir, "*.wav"))
-        if self.trim_silence:
-            pcm_dict = self.trim_pcm_dict
-            mel_dict = self.trim_mel_dict
-        else:
-            pcm_dict = self.get_pcm_dict(src_wav_dir)
-            mel_dict = self.mel_dict
+        pcm_dict = self.get_pcm_dict(src_wav_dir)
+        mel_dict = self.mel_dict
 
         logging.info("[AudioProcessor] Energy extraction started")
         # Get raw energy
@@ -665,7 +609,7 @@ class AudioProcessor:
                     logging.warning(
                         "[AudioProcessor] Energy extraction failed for %s", wav_basename
                     )
-                    self.badcase_list[wav_basename] = 1
+                    self.badcase_list.append(wav_basename)
                 else:
                     energy = result
                     if len(mel_dict) > 0:
@@ -675,27 +619,24 @@ class AudioProcessor:
                             "[AudioProcessor] Energy length mismatch with mel in %s",
                             wav_basename,
                         )
-                        self.badcase_list[wav_basename] = 1
+                        self.badcase_list.append(wav_basename)
                         continue
                     self.energy_dict[wav_basename] = energy
-
-        # TODO: perhpas some developers want to use raw energy
-        #  save raw energy to a specific dir
 
         logging.info("Melspec statistic proceeding...")
         #  Normalize energy
         energy_mean = compute_mean(list(self.energy_dict.values()), dims=1)
         energy_std = compute_std(list(self.energy_dict.values()), energy_mean, dims=1)
         np.savetxt(
-            os.path.join(out_feature_dir, "energy_mean.txt"), energy_mean, fmt="%.6f"
+            os.path.join(out_energy_dir, "energy_mean.txt"), energy_mean, fmt="%.6f"
         )
         np.savetxt(
-            os.path.join(out_feature_dir, "energy_std.txt"), energy_std, fmt="%.6f"
+            os.path.join(out_energy_dir, "energy_std.txt"), energy_std, fmt="%.6f"
         )
         logging.info(
             "[AudioProcessor] energy mean and std saved to:\n{},\n{}".format(
-                os.path.join(out_feature_dir, "energy_mean.txt"),
-                os.path.join(out_feature_dir, "energy_std.txt"),
+                os.path.join(out_energy_dir, "energy_mean.txt"),
+                os.path.join(out_energy_dir, "energy_std.txt"),
             )
         )
 
@@ -704,6 +645,13 @@ class AudioProcessor:
             energy = self.energy_dict[wav_basename]
             norm_energy = f0_norm_mean_std(energy, energy_mean, energy_std)
             self.energy_dict[wav_basename] = norm_energy
+
+        #  save frame energy to a specific dir
+        for wav_basename in self.energy_dict:
+            np.save(
+                os.path.join(out_frame_energy_dir, wav_basename + ".npy"),
+                self.energy_dict[wav_basename].reshape(-1),
+            )
 
         #  phone level average
         #  if there is no duration then save the frame-level energy
@@ -729,19 +677,19 @@ class AudioProcessor:
                             "[AudioProcessor] Energy extraction failed in phone level avg for: %s",
                             wav_basename,
                         )
-                        self.badcase_list[wav_basename] = 1
+                        self.badcase_list.append(wav_basename)
                     else:
                         avg_energy = result
                         self.energy_dict[wav_basename] = avg_energy
 
         for wav_basename in self.energy_dict:
             np.save(
-                os.path.join(out_feature_dir, wav_basename + ".npy"),
+                os.path.join(out_energy_dir, wav_basename + ".npy"),
                 self.energy_dict[wav_basename].reshape(-1),
             )
 
         logging.info("[AudioProcessor] Energy normalization finished")
-        logging.info("[AudioProcessor] Normed Energy saved to %s", out_feature_dir)
+        logging.info("[AudioProcessor] Normed Energy saved to %s", out_energy_dir)
         logging.info("[AudioProcessor] Energy extraction finished")
 
         return True
@@ -753,9 +701,11 @@ class AudioProcessor:
         src_interval_dir = os.path.join(src_voice_dir, "interval")
 
         out_mel_dir = os.path.join(out_data_dir, "mel")
-        out_trim_mel_dir = os.path.join(out_data_dir, "trim_mel")
         out_f0_dir = os.path.join(out_data_dir, "f0")
+        out_frame_f0_dir = os.path.join(out_data_dir, "frame_f0")
+        out_frame_uv_dir = os.path.join(out_data_dir, "frame_uv")
         out_energy_dir = os.path.join(out_data_dir, "energy")
+        out_frame_energy_dir = os.path.join(out_data_dir, "frame_energy")
         out_duration_dir = os.path.join(out_data_dir, "raw_duration")
         out_cali_duration_dir = os.path.join(out_data_dir, "duration")
 
@@ -764,10 +714,9 @@ class AudioProcessor:
         with_duration = os.path.exists(src_interval_dir)
 
         #  TODO: to resume from previous process, a log file is needed
-        normed_wav_dir = os.path.join(out_data_dir, "wav")
-        trimmed_wav_dir = os.path.join(out_data_dir, "trim_wav")
+        train_wav_dir = os.path.join(out_data_dir, "wav")
 
-        succeed = self.amp_normalize(raw_wav_dir, normed_wav_dir)
+        succeed = self.amp_normalize(raw_wav_dir, train_wav_dir)
         if not succeed:
             logging.error("[AudioProcessor] amp_normalize failed, exit")
             return False
@@ -779,16 +728,10 @@ class AudioProcessor:
                 logging.error("[AudioProcessor] duration_generate failed, exit")
                 return False
 
-        succeed = self.mel_extract(normed_wav_dir, out_mel_dir)
-        if not succeed:
-            logging.error("[AudioProcessor] mel_extract failed, exit")
-            return False
-
         if self.trim_silence:
-            feat_wav_dir = trimmed_wav_dir
             if with_duration:
                 succeed = self.trim_silence_wav_with_interval(
-                    normed_wav_dir, out_duration_dir, feat_wav_dir
+                    train_wav_dir, out_duration_dir
                 )
                 if not succeed:
                     logging.error(
@@ -796,32 +739,38 @@ class AudioProcessor:
                     )
                     return False
             else:
-                succeed = self.trim_silence_wav(normed_wav_dir, feat_wav_dir)
+                succeed = self.trim_silence_wav(train_wav_dir)
                 if not succeed:
                     logging.error("[AudioProcessor] trim_silence_wav failed, exit")
                     return False
-            self.trim_mel_extract(feat_wav_dir, out_trim_mel_dir)
-        else:
-            feat_wav_dir = normed_wav_dir
+
+        succeed = self.mel_extract(train_wav_dir, out_mel_dir)
+        if not succeed:
+            logging.error("[AudioProcessor] mel_extract failed, exit")
+            return False
 
         if aux_metafile is not None and with_duration:
             self.calibrate_SyllableDuration(
                 out_duration_dir, aux_metafile, out_cali_duration_dir
             )
 
-        succeed = self.pitch_extract(feat_wav_dir, out_f0_dir)
+        succeed = self.pitch_extract(
+            train_wav_dir, out_f0_dir, out_frame_f0_dir, out_frame_uv_dir
+        )
         if not succeed:
             logging.error("[AudioProcessor] pitch_extract failed, exit")
             return False
 
-        succeed = self.energy_extract(feat_wav_dir, out_energy_dir)
+        succeed = self.energy_extract(
+            train_wav_dir, out_energy_dir, out_frame_energy_dir
+        )
         if not succeed:
             logging.error("[AudioProcessor] energy_extract failed, exit")
             return False
 
         # recording badcase list
         with open(os.path.join(out_data_dir, "badlist.txt"), "w") as f:
-            f.write("\n".join(self.badcase_list.keys()))
+            f.write("\n".join(self.badcase_list))
 
         logging.info("[AudioProcessor] All features extracted successfully!")
 

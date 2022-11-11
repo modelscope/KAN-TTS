@@ -1,12 +1,16 @@
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.utils import weight_norm, remove_weight_norm
+from torch.distributions.uniform import Uniform
+from torch.distributions.normal import Normal
 from kantts.models.utils import init_weights
 
 
 def get_padding(kernel_size, dilation=1):
     return int((kernel_size * dilation - dilation) / 2)
+
 
 class Conv1d(torch.nn.Module):
     def __init__(
@@ -37,11 +41,10 @@ class Conv1d(torch.nn.Module):
         )
         self.conv1d.apply(init_weights)
 
-
     def forward(self, x):
         x = self.conv1d(x)
         return x
-    
+
     def remove_weight_norm(self):
         remove_weight_norm(self.conv1d)
 
@@ -184,7 +187,6 @@ class ResidualBlock(torch.nn.Module):
                     1,
                     dilation=dilation[i],
                     padding=get_padding(kernel_size, dilation[i]),
-                    
                 )
                 for i in range(len(dilation))
             ]
@@ -222,3 +224,67 @@ class ResidualBlock(torch.nn.Module):
             layer.remove_weight_norm()
         for layer in self.convs2:
             layer.remove_weight_norm()
+
+
+class SourceModule(torch.nn.Module):
+    def __init__(
+        self, nb_harmonics, upsample_ratio, sampling_rate, alpha=0.1, sigma=0.003
+    ):
+        super(SourceModule, self).__init__()
+
+        self.nb_harmonics = nb_harmonics
+        self.upsample_ratio = upsample_ratio
+        self.sampling_rate = sampling_rate
+        self.alpha = alpha
+        self.sigma = sigma
+
+        self.ffn = nn.Sequential(
+            weight_norm(nn.Conv1d(self.nb_harmonics + 1, 1, kernel_size=1, stride=1)),
+            nn.Tanh(),
+        )
+
+    def forward(self, pitch, uv):
+        """
+        :param pitch: [B, 1, frame_len], Hz
+        :param uv: [B, 1, frame_len] vuv flag
+        :return: [B, 1, sample_len]
+        """
+        with torch.no_grad():
+            pitch_samples = F.interpolate(
+                pitch, scale_factor=(self.upsample_ratio), mode="nearest"
+            )
+            uv_samples = F.interpolate(
+                uv, scale_factor=(self.upsample_ratio), mode="nearest"
+            )
+
+            F_mat = torch.zeros(
+                (pitch_samples.size(0), self.nb_harmonics + 1, pitch_samples.size(-1))
+            ).to(pitch_samples.device)
+            for i in range(self.nb_harmonics + 1):
+                F_mat[:, i : i + 1, :] = pitch_samples * (i + 1) / self.sampling_rate
+
+            theta_mat = 2 * np.pi * (torch.cumsum(F_mat, dim=-1) % 1)
+            u_dist = Uniform(low=-np.pi, high=np.pi)
+            phase_vec = u_dist.sample(
+                sample_shape=(pitch.size(0), self.nb_harmonics + 1, 1)
+            ).to(F_mat.device)
+            phase_vec[:, 0, :] = 0
+
+            n_dist = Normal(loc=0.0, scale=self.sigma)
+            noise = n_dist.sample(
+                sample_shape=(
+                    pitch_samples.size(0),
+                    self.nb_harmonics + 1,
+                    pitch_samples.size(-1),
+                )
+            ).to(F_mat.device)
+
+            e_voice = self.alpha * torch.sin(theta_mat + phase_vec) + noise
+            e_unvoice = self.alpha / 3 / self.sigma * noise
+
+            e = e_voice * uv_samples + e_unvoice * (1 - uv_samples)
+
+        return self.ffn(e)
+
+    def remove_weight_norm(self):
+        remove_weight_norm(self.ffn[0])

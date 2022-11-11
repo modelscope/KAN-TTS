@@ -90,21 +90,21 @@ class Voc_Dataset(torch.utils.data.Dataset):
         self,
         metafile,
         root_dir,
-        sampling_rate=24000,
-        n_fft=1024,
-        hop_length=240,
-        allow_cache=False,
-        batch_max_steps=20480,
+        config,
     ):
         self.meta = []
-        self.sampling_rate = sampling_rate
-        self.n_fft = n_fft
-        self.hop_length = hop_length
-        self.batch_max_steps = batch_max_steps
+        self.config = config
+        self.sampling_rate = config["audio_config"]["sampling_rate"]
+        self.n_fft = config["audio_config"]["n_fft"]
+        self.hop_length = config["audio_config"]["hop_length"]
+        self.batch_max_steps = config["batch_max_steps"]
         self.batch_max_frames = self.batch_max_steps // self.hop_length
         self.aux_context_window = 0  # TODO: make it configurable
         self.start_offset = self.aux_context_window
         self.end_offset = -(self.batch_max_frames + self.aux_context_window)
+        self.nsf_enable = (
+            config["Model"]["Generator"]["params"].get("nsf_params", None) is not None
+        )
 
         if not isinstance(metafile, list):
             metafile = [metafile]
@@ -139,8 +139,8 @@ class Voc_Dataset(torch.utils.data.Dataset):
                     raise ValueError("wav or mel directory not found")
                 self.meta.extend(self.load_meta_from_dir(wav_dir, mel_dir))
 
-        self.allow_cache = allow_cache
-        if allow_cache:
+        self.allow_cache = config["allow_cache"]
+        if self.allow_cache:
             self.manager = Manager()
             self.caches = self.manager.list()
             self.caches += [() for _ in range(len(self.meta))]
@@ -148,21 +148,40 @@ class Voc_Dataset(torch.utils.data.Dataset):
     @staticmethod
     def gen_metafile(wav_dir, out_dir, split_ratio=0.98):
         wav_files = glob.glob(os.path.join(wav_dir, "*.wav"))
+        frame_f0_dir = os.path.join(out_dir, "frame_f0")
+        frame_uv_dir = os.path.join(out_dir, "frame_uv")
+        mel_dir = os.path.join(out_dir, "mel")
         random.shuffle(wav_files)
         num_train = int(len(wav_files) * split_ratio) - 1
         with open(os.path.join(out_dir, "train.lst"), "w") as f:
             for wav_file in wav_files[:num_train]:
-                f.write("{}\n".format(os.path.splitext(os.path.basename(wav_file))[0]))
+                index = os.path.splitext(os.path.basename(wav_file))[0]
+                if (
+                    not os.path.exists(os.path.join(frame_f0_dir, index + ".npy"))
+                    or not os.path.exists(os.path.join(frame_uv_dir, index + ".npy"))
+                    or not os.path.exists(os.path.join(mel_dir, index + ".npy"))
+                ):
+                    continue
+                f.write("{}\n".format(index))
 
         with open(os.path.join(out_dir, "valid.lst"), "w") as f:
             for wav_file in wav_files[num_train:]:
-                f.write("{}\n".format(os.path.splitext(os.path.basename(wav_file))[0]))
+                index = os.path.splitext(os.path.basename(wav_file))[0]
+                if (
+                    not os.path.exists(os.path.join(frame_f0_dir, index + ".npy"))
+                    or not os.path.exists(os.path.join(frame_uv_dir, index + ".npy"))
+                    or not os.path.exists(os.path.join(mel_dir, index + ".npy"))
+                ):
+                    continue
+                f.write("{}\n".format(index))
 
     def load_meta(self, metafile, data_dir):
         with open(metafile, "r") as f:
             lines = f.readlines()
         wav_dir = os.path.join(data_dir, "wav")
         mel_dir = os.path.join(data_dir, "mel")
+        frame_f0_dir = os.path.join(data_dir, "frame_f0")
+        frame_uv_dir = os.path.join(data_dir, "frame_uv")
         if not os.path.exists(wav_dir) or not os.path.exists(mel_dir):
             raise ValueError("wav or mel directory not found")
         items = []
@@ -171,8 +190,9 @@ class Voc_Dataset(torch.utils.data.Dataset):
             name = name.strip()
             mel_file = os.path.join(mel_dir, name + ".npy")
             wav_file = os.path.join(wav_dir, name + ".wav")
-            if os.path.exists(mel_file) and os.path.exists(wav_file):
-                items.append((wav_file, mel_file))
+            frame_f0_file = os.path.join(frame_f0_dir, name + ".npy")
+            frame_uv_file = os.path.join(frame_uv_dir, name + ".npy")
+            items.append((wav_file, mel_file, frame_f0_file, frame_uv_file))
         return items
 
     def load_meta_from_dir(self, wav_dir, mel_dir):
@@ -191,10 +211,15 @@ class Voc_Dataset(torch.utils.data.Dataset):
         if self.allow_cache and len(self.caches[idx]) != 0:
             return self.caches[idx]
 
-        wav_file, mel_file = self.meta[idx]
+        wav_file, mel_file, frame_f0_file, frame_uv_file = self.meta[idx]
 
         wav_data = librosa.core.load(wav_file, sr=self.sampling_rate)[0]
         mel_data = np.load(mel_file)
+
+        if self.nsf_enable:
+            frame_f0_data = np.load(frame_f0_file).reshape(-1, 1)
+            frame_uv_data = np.load(frame_uv_file).reshape(-1, 1)
+            mel_data = np.concatenate((mel_data, frame_f0_data, frame_uv_data), axis=1)
 
         # make sure the audio length and feature length are matched
         wav_data = np.pad(wav_data, (0, self.n_fft), mode="reflect")
@@ -242,12 +267,8 @@ class Voc_Dataset(torch.utils.data.Dataset):
 
 
 def get_voc_datasets(
+    config,
     root_dir,
-    sampling_rate,
-    n_fft,
-    hop_length,
-    allow_cache,
-    batch_max_steps,
     split_ratio=0.98,
 ):
     if isinstance(root_dir, str):
@@ -266,21 +287,13 @@ def get_voc_datasets(
     train_dataset = Voc_Dataset(
         train_meta_lst,
         root_dir,
-        sampling_rate,
-        n_fft,
-        hop_length,
-        allow_cache,
-        batch_max_steps,
+        config,
     )
 
     valid_dataset = Voc_Dataset(
         valid_meta_lst,
         root_dir,
-        sampling_rate,
-        n_fft,
-        hop_length,
-        allow_cache,
-        batch_max_steps,
+        config,
     )
 
     return train_dataset, valid_dataset
@@ -301,6 +314,9 @@ class AM_Dataset(torch.utils.data.Dataset):
         self.meta = []
         self.config = config
         self.with_duration = True
+        self.nsf_enable = self.config["Model"]["KanTtsSAMBERT"]["params"].get(
+            "NSF", False
+        )
 
         if not isinstance(metafile, list):
             metafile = [metafile]
@@ -339,7 +355,15 @@ class AM_Dataset(torch.utils.data.Dataset):
         if self.allow_cache and len(self.caches[idx]) != 0:
             return self.caches[idx]
 
-        ling_txt, mel_file, dur_file, f0_file, energy_file = self.meta[idx]
+        (
+            ling_txt,
+            mel_file,
+            dur_file,
+            f0_file,
+            energy_file,
+            frame_f0_file,
+            frame_uv_file,
+        ) = self.meta[idx]
 
         ling_data = self.ling_unit.encode_symbol_sequence(ling_txt)
         mel_data = np.load(mel_file)
@@ -353,20 +377,11 @@ class AM_Dataset(torch.utils.data.Dataset):
                 len(ling_data[0]), mel_data.shape[0]
             )
 
-        #  make sure the audio length and feature length are matched
-        #  assert len(mel_data) == np.sum(
-        #          dur_data
-        #  ), "audio and feature length not matched: {} vs {}".format(mel_file, dur_file)
-        #  assert len(ling_data[0]) == len(
-        #      dur_data
-        #  ), "linguistic and feature length not matched: {}, {} v.s {}".format(
-        #          dur_file, len(ling_data[0]), len(dur_data))
-        #  assert len(f0_data) == len(
-        #      dur_data
-        #  ), "f0 and dur length not matched: {} vs {}".format(f0_file, dur_file)
-        #  assert len(energy_data) == len(
-        #      dur_data
-        #  ), "energy and dur length not matched: {} vs {}".format(energy_file, dur_file)
+        # Concat frame-level f0 and uv to mel_data
+        if self.nsf_enable:
+            frame_f0_data = np.load(frame_f0_file).reshape(-1, 1)
+            frame_uv_data = np.load(frame_uv_file).reshape(-1, 1)
+            mel_data = np.concatenate([mel_data, frame_f0_data, frame_uv_data], axis=1)
 
         if self.allow_cache:
             self.caches[idx] = (
@@ -384,13 +399,12 @@ class AM_Dataset(torch.utils.data.Dataset):
         with open(metafile, "r") as f:
             lines = f.readlines()
 
-        if self.config["audio_config"]["trim_silence"]:
-            mel_dir = os.path.join(data_dir, "trim_mel")
-        else:
-            mel_dir = os.path.join(data_dir, "mel")
+        mel_dir = os.path.join(data_dir, "mel")
         dur_dir = os.path.join(data_dir, "duration")
         f0_dir = os.path.join(data_dir, "f0")
         energy_dir = os.path.join(data_dir, "energy")
+        frame_f0_dir = os.path.join(data_dir, "frame_f0")
+        frame_uv_dir = os.path.join(data_dir, "frame_uv")
 
         self.with_duration = os.path.exists(dur_dir)
 
@@ -406,37 +420,59 @@ class AM_Dataset(torch.utils.data.Dataset):
                 dur_file = None
             f0_file = os.path.join(f0_dir, index + ".npy")
             energy_file = os.path.join(energy_dir, index + ".npy")
-            if (
-                os.path.exists(mel_file)
-                and os.path.exists(f0_file)
-                and os.path.exists(energy_file)
-            ):
-                if self.with_duration and not os.path.exists(dur_file):
-                    continue
-                items.append(
-                    (
-                        ling_txt,
-                        mel_file,
-                        dur_file,
-                        f0_file,
-                        energy_file,
-                    )
+            frame_f0_file = os.path.join(frame_f0_dir, index + ".npy")
+            frame_uv_file = os.path.join(frame_uv_dir, index + ".npy")
+
+            items.append(
+                (
+                    ling_txt,
+                    mel_file,
+                    dur_file,
+                    f0_file,
+                    energy_file,
+                    frame_f0_file,
+                    frame_uv_file,
                 )
+            )
 
         return items
 
     @staticmethod
-    def gen_metafile(raw_meta_file, out_dir, split_ratio=0.98):
+    def gen_metafile(raw_meta_file, out_dir, badlist=None, split_ratio=0.98):
         with open(raw_meta_file, "r") as f:
             lines = f.readlines()
+        frame_f0_dir = os.path.join(out_dir, "frame_f0")
+        frame_uv_dir = os.path.join(out_dir, "frame_uv")
+        mel_dir = os.path.join(out_dir, "mel")
+        duration_dir = os.path.join(out_dir, "duration")
         random.shuffle(lines)
         num_train = int(len(lines) * split_ratio) - 1
         with open(os.path.join(out_dir, "am_train.lst"), "w") as f:
             for line in lines[:num_train]:
+                index = line.split("\t")[0]
+                if badlist is not None and index in badlist:
+                    continue
+                if (
+                    not os.path.exists(os.path.join(frame_f0_dir, index + ".npy"))
+                    or not os.path.exists(os.path.join(frame_uv_dir, index + ".npy"))
+                    or not os.path.exists(os.path.join(duration_dir, index + ".npy"))
+                    or not os.path.exists(os.path.join(mel_dir, index + ".npy"))
+                ):
+                    continue
                 f.write(line)
 
         with open(os.path.join(out_dir, "am_valid.lst"), "w") as f:
             for line in lines[num_train:]:
+                index = line.split("\t")[0]
+                if badlist is not None and index in badlist:
+                    continue
+                if (
+                    not os.path.exists(os.path.join(frame_f0_dir, index + ".npy"))
+                    or not os.path.exists(os.path.join(frame_uv_dir, index + ".npy"))
+                    or not os.path.exists(os.path.join(duration_dir, index + ".npy"))
+                    or not os.path.exists(os.path.join(mel_dir, index + ".npy"))
+                ):
+                    continue
                 f.write(line)
 
     #  TODO: implement collate_fn

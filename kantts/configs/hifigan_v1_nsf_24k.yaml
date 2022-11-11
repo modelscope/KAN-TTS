@@ -1,0 +1,191 @@
+model_type: hifigan
+Model:
+###########################################################
+#         GENERATOR NETWORK ARCHITECTURE SETTING          #
+###########################################################
+  Generator:
+    params:
+      in_channels: 80                       
+      out_channels: 1                      
+      channels: 512                       
+      kernel_size: 7                     
+      upsample_scales: [8, 5, 3, 2]        
+      upsample_kernal_sizes: [16, 10, 6, 4] 
+      resblock_kernel_sizes: [3, 7, 11]     
+      resblock_dilations:                  
+            - [1, 3, 5]
+            - [1, 3, 5]
+            - [1, 3, 5]
+      bias: true                           
+      causal: true                             
+      nonlinear_activation: "LeakyReLU"    
+      nonlinear_activation_params:         
+        negative_slope: 0.1
+      use_weight_norm: true               
+      nsf_params:
+        nb_harmonics: 7
+        sampling_rate: 24000
+    optimizer:
+      type: Adam
+      params:
+        lr: 2.0e-4
+        betas: [0.5, 0.9]
+        weight_decay: 0.0
+    scheduler:
+      type: MultiStepLR
+      params:
+        gamma: 0.5
+        milestones:
+            - 200000
+            - 400000
+            - 600000
+            - 800000
+
+###########################################################
+#       DISCRIMINATOR NETWORK ARCHITECTURE SETTING        #
+###########################################################
+  MultiScaleDiscriminator:
+    params:
+      scales: 3                              
+      downsample_pooling: "DWT"  
+      downsample_pooling_params:
+          kernel_size: 4                    
+          stride: 2                         
+          padding: 2                        
+      discriminator_params:
+          in_channels: 1                     
+          out_channels: 1                    
+          kernel_sizes: [15, 41, 5, 3]       
+          channels: 128                      
+          max_downsample_channels: 1024     
+          max_groups: 16                   
+          bias: true
+          downsample_scales: [4, 4, 4, 4, 1]
+          nonlinear_activation: "LeakyReLU"  
+          nonlinear_activation_params:
+            negative_slope: 0.1
+      follow_official_norm: true    
+    optimizer:
+      type: Adam
+      params:
+        lr: 2.0e-4
+        betas: [0.5, 0.9]
+        weight_decay: 0.0
+    scheduler:
+      type: MultiStepLR
+      params:
+        gamma: 0.5
+        milestones:
+            - 200000
+            - 400000
+            - 600000
+            - 800000
+
+  MultiPeriodDiscriminator:
+    params:
+      periods: [2, 3, 5, 7, 11]      
+      discriminator_params:
+        in_channels: 1                  
+        out_channels: 1                  
+        kernel_sizes: [5, 3]              
+        channels: 32                       
+        downsample_scales: [3, 3, 3, 3, 1] 
+        max_downsample_channels: 1024      
+        bias: true                       
+        nonlinear_activation: "LeakyReLU"  
+        nonlinear_activation_params:       
+          negative_slope: 0.1
+        use_spectral_norm: false           
+    optimizer:
+      type: Adam
+      params:
+        lr: 2.0e-4
+        betas: [0.5, 0.9]
+        weight_decay: 0.0
+    scheduler:
+      type: MultiStepLR
+      params:
+        gamma: 0.5
+        milestones:
+            - 200000
+            - 400000
+            - 600000
+            - 800000
+
+####################################################
+#                   LOSS SETTING                   #
+####################################################
+Loss:
+  generator_adv_loss:
+    enable: True
+    params:
+      average_by_discriminators: False
+    weights: 1.0
+
+  discriminator_adv_loss:
+    enable: True
+    params:
+      average_by_discriminators: False
+    weights: 1.0
+
+  stft_loss:
+    enable: False             # Whether to use multi-resolution STFT loss.
+
+  mel_loss:
+    enable: True
+    params:
+      fs: 24000
+      fft_size: 1024
+      hop_size: 240
+      win_length: 1024
+      window: "hann"
+      num_mels: 80
+      fmin: 0
+      fmax: 8000
+      log_base: null
+    weights: 45.0
+
+  subband_stft_loss:
+    enable: False
+    params:
+      fft_sizes: [384, 683, 171]  # List of FFT size for STFT-based loss.
+      hop_sizes: [35, 75, 15]     # List of hop size for STFT-based loss
+      win_lengths: [150, 300, 60] # List of window length for STFT-based loss.
+      window: "hann_window"       # Window function for STFT-based loss
+
+  feat_match_loss:
+    enable: True
+    params:
+      average_by_discriminators: false 
+      average_by_layers: false         
+    weights: 2.0
+
+
+###########################################################
+#                  DATA LOADER SETTING                    #
+###########################################################
+batch_size: 16              
+batch_max_steps: 9600       # Length of each audio in batch. Make sure dividable by hop_size.
+pin_memory: False            
+num_workers: 2 # FIXME: set > 0 may stuck on macos              
+remove_short_samples: False 
+allow_cache: True           
+
+generator_grad_norm: -1
+
+discriminator_grad_norm: -1
+
+###########################################################
+#                    INTERVAL SETTING                     #
+###########################################################
+generator_train_start_steps: 1     # Number of steps to start to train discriminator.
+discriminator_train_start_steps: 0 # Number of steps to start to train discriminator.
+train_max_steps: 2500000           # Number of training steps.
+save_interval_steps: 20000         # Interval steps to save checkpoint.
+eval_interval_steps: 10000          # Interval steps to evaluate the network.
+log_interval_steps: 1000            # Interval steps to record the training log.
+
+###########################################################
+#                     OTHER SETTING                       #
+###########################################################
+num_save_intermediate_results: 4  # Number of results to be saved as intermediate results.

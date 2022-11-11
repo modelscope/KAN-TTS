@@ -85,12 +85,8 @@ def train(
     #  TODO: abstract dataloader
     # Dataset prepare
     train_dataset, valid_dataset = get_voc_datasets(
+        config,
         root_dir,
-        config["audio_config"]["sampling_rate"],
-        config["audio_config"]["n_fft"],
-        config["audio_config"]["hop_length"],
-        config["allow_cache"],
-        config["batch_max_steps"],
     )
 
     logging.info(f"The number of training files = {len(train_dataset)}.")
