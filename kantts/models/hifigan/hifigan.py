@@ -1,10 +1,18 @@
+import numpy as np
 import torch
 import torch.nn.functional as F
 import torch.nn as nn
 from torch.nn.utils import weight_norm, spectral_norm
 from distutils.version import LooseVersion
 from pytorch_wavelets import DWT1DForward
-from .layers import Conv1d, CausalConv1d, ConvTranspose1d, CausalConvTranspose1d, ResidualBlock
+from .layers import (
+    Conv1d,
+    CausalConv1d,
+    ConvTranspose1d,
+    CausalConvTranspose1d,
+    ResidualBlock,
+    SourceModule,
+)
 from kantts.utils.audio_torch import stft
 import copy
 
@@ -28,6 +36,7 @@ class Generator(torch.nn.Module):
         nonlinear_activation="LeakyReLU",
         nonlinear_activation_params={"negative_slope": 0.1},
         use_weight_norm=True,
+        nsf_params=None,
     ):
         super(Generator, self).__init__()
 
@@ -41,11 +50,12 @@ class Generator(torch.nn.Module):
         self.num_upsamples = len(upsample_kernal_sizes)
         self.num_kernels = len(resblock_kernel_sizes)
         self.out_channels = out_channels
-        
+        self.nsf_enable = nsf_params is not None
+
         self.transpose_upsamples = torch.nn.ModuleList()
         self.repeat_upsamples = torch.nn.ModuleList()  # for repeat upsampling
         self.conv_blocks = torch.nn.ModuleList()
-        
+
         conv_cls = CausalConv1d if causal else Conv1d
         conv_transposed_cls = CausalConvTranspose1d if causal else ConvTranspose1d
 
@@ -108,17 +118,54 @@ class Generator(torch.nn.Module):
             padding=(kernel_size - 1) // 2,
         )
 
+        if self.nsf_enable:
+            self.source_module = SourceModule(
+                nb_harmonics=nsf_params["nb_harmonics"],
+                upsample_ratio=np.cumprod(self.upsample_scales)[-1],
+                sampling_rate=nsf_params["sampling_rate"],
+            )
+            self.source_downs = nn.ModuleList()
+            self.downsample_rates = [1] + self.upsample_scales[::-1][:-1]
+            self.downsample_cum_rates = np.cumprod(self.downsample_rates)
+
+            for i, u in enumerate(self.downsample_cum_rates[::-1]):
+                if u == 1:
+                    self.source_downs.append(
+                        Conv1d(1, channels // (2 ** (i + 1)), 1, 1)
+                    )
+                else:
+                    self.source_downs.append(
+                        conv_cls(
+                            1,
+                            channels // (2 ** (i + 1)),
+                            u * 2,
+                            u,
+                            padding=u // 2,
+                        )
+                    )
+
     def forward(self, x):
-        x = self.conv_pre(x)
+        mel = x[:, :-2, :]
+        pitch = x[:, -2:-1, :]
+        uv = x[:, -1:, :]
+
+        excitation = self.source_module(pitch, uv)
+        x = self.conv_pre(mel)
         for i in range(self.num_upsamples):
             #  FIXME: sin function here seems to be causing issues
             x = torch.sin(x) + x
-            # transconv
-            x1 = self.transpose_upsamples[i](x)
-            # repeat
-            x2 = self.repeat_upsamples[i](x)
+            x = self.repeat_upsamples[i](x)
 
-            x = x1 + x2
+            if self.nsf_enable:
+                # Downsampling the excitation signal
+                e = self.source_downs[i](excitation)
+                # augment inputs with the excitation
+                x = x + e
+            else:
+                # transconv
+                up = self.transpose_upsamples[i](x)
+                x = x + up
+
             xs = None
             for j in range(self.num_kernels):
                 if xs is None:
@@ -143,6 +190,10 @@ class Generator(torch.nn.Module):
             layer.remove_weight_norm()
         self.conv_pre.remove_weight_norm()
         self.conv_post.remove_weight_norm()
+        if self.nsf_enable:
+            self.source_module.remove_weight_norm()
+            for layer in self.source_downs:
+                layer.remove_weight_norm()
 
 
 class PeriodDiscriminator(torch.nn.Module):

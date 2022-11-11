@@ -38,6 +38,7 @@ languages = {
 
 def gen_metafile(
     voice_output_dir,
+    badlist=None,
     split_ratio=0.98,
 ):
 
@@ -45,7 +46,9 @@ def gen_metafile(
     voc_valid_meta = os.path.join(voice_output_dir, "valid.lst")
     if not os.path.exists(voc_train_meta) or not os.path.exists(voc_valid_meta):
         Voc_Dataset.gen_metafile(
-            os.path.join(voice_output_dir, "wav"), voice_output_dir, split_ratio
+            os.path.join(voice_output_dir, "wav"),
+            voice_output_dir,
+            split_ratio,
         )
         logging.info("Voc metafile generated.")
 
@@ -53,12 +56,12 @@ def gen_metafile(
     am_train_meta = os.path.join(voice_output_dir, "am_train.lst")
     am_valid_meta = os.path.join(voice_output_dir, "am_valid.lst")
     if not os.path.exists(am_train_meta) or not os.path.exists(am_valid_meta):
-        AM_Dataset.gen_metafile(raw_metafile, voice_output_dir, split_ratio)
+        AM_Dataset.gen_metafile(raw_metafile, voice_output_dir, badlist, split_ratio)
         logging.info("AM metafile generated.")
 
 
 #  TODO: Zh-CN as default
-def process_mit_style_data(
+def process_data(
     voice_input_dir,
     voice_output_dir,
     audio_config,
@@ -130,7 +133,7 @@ def process_mit_style_data(
 
     # Generate Voc&AM metafile
     # TODO: train/valid ratio setting
-    gen_metafile(voice_output_dir)
+    gen_metafile(voice_output_dir, ap.badcase_list)
 
 
 if __name__ == "__main__":
@@ -148,7 +151,7 @@ if __name__ == "__main__":
     logging_to_file(os.path.join(args.voice_output_dir, "data_process_stdout.log"))
 
     try:
-        process_mit_style_data(
+        process_data(
             args.voice_input_dir,
             args.voice_output_dir,
             args.audio_config,
