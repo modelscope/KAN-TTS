@@ -145,26 +145,29 @@ class Generator(torch.nn.Module):
                     )
 
     def forward(self, x):
-        mel = x[:, :-2, :]
-        pitch = x[:, -2:-1, :]
-        uv = x[:, -1:, :]
+        if self.nsf_enable:
+            mel = x[:, :-2, :]
+            pitch = x[:, -2:-1, :]
+            uv = x[:, -1:, :]
+            excitation = self.source_module(pitch, uv)
+        else:
+            mel = x
 
-        excitation = self.source_module(pitch, uv)
         x = self.conv_pre(mel)
         for i in range(self.num_upsamples):
             #  FIXME: sin function here seems to be causing issues
             x = torch.sin(x) + x
-            x = self.repeat_upsamples[i](x)
+            rep = self.repeat_upsamples[i](x)
 
             if self.nsf_enable:
                 # Downsampling the excitation signal
                 e = self.source_downs[i](excitation)
                 # augment inputs with the excitation
-                x = x + e
+                x = rep + e
             else:
                 # transconv
                 up = self.transpose_upsamples[i](x)
-                x = x + up
+                x = rep + up
 
             xs = None
             for j in range(self.num_kernels):
