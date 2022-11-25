@@ -9,8 +9,10 @@ import random
 import functools
 from tqdm import tqdm
 import math
-from kantts.utils.ling_unit.ling_unit import KanTtsLinguisticUnit
+from kantts.utils.ling_unit.ling_unit import KanTtsLinguisticUnit, emotion_types
 from scipy.stats import betabinom
+
+DATASET_RANDOM_SEED = 1234
 
 
 @functools.lru_cache(maxsize=256)
@@ -151,6 +153,7 @@ class Voc_Dataset(torch.utils.data.Dataset):
         frame_f0_dir = os.path.join(out_dir, "frame_f0")
         frame_uv_dir = os.path.join(out_dir, "frame_uv")
         mel_dir = os.path.join(out_dir, "mel")
+        random.seed(DATASET_RANDOM_SEED)
         random.shuffle(wav_files)
         num_train = int(len(wav_files) * split_ratio) - 1
         with open(os.path.join(out_dir, "train.lst"), "w") as f:
@@ -299,6 +302,50 @@ def get_voc_datasets(
     return train_dataset, valid_dataset
 
 
+#  TODO(Yuxuan): refine the logic, you'd better not use emotion tag, it's ambiguous.
+def get_fp_label(aug_ling_txt):
+    token_lst = aug_ling_txt.split(" ")
+    emo_lst = [token.strip("{}").split("$")[4] for token in token_lst]
+    syllable_lst = [token.strip("{}").split("$")[0] for token in token_lst]
+
+    # EOS token append
+    emo_lst.append(emotion_types[0])
+    syllable_lst.append("EOS")
+
+    # According to the original emotion tag, set each token's fp label.
+    if emo_lst[0] != emotion_types[3]:
+        emo_lst[0] = emotion_types[0]
+        emo_lst[1] = emotion_types[0]
+    for i in range(len(emo_lst) - 2, 1, -1):
+        if emo_lst[i] != emotion_types[3] and emo_lst[i - 1] != emotion_types[3]:
+            emo_lst[i] = emotion_types[0]
+        elif emo_lst[i] != emotion_types[3] and emo_lst[i - 1] == emotion_types[3]:
+            emo_lst[i] = emotion_types[3]
+            if syllable_lst[i - 2] == "ga":
+                emo_lst[i + 1] = emotion_types[1]
+            elif syllable_lst[i - 2] == "ge" and syllable_lst[i - 1] == "en_c":
+                emo_lst[i + 1] = emotion_types[2]
+            else:
+                emo_lst[i + 1] = emotion_types[4]
+
+    fp_label = []
+    for i in range(len(emo_lst)):
+        if emo_lst[i] == emotion_types[0]:
+            fp_label.append(0)
+        elif emo_lst[i] == emotion_types[1]:
+            fp_label.append(1)
+        elif emo_lst[i] == emotion_types[2]:
+            fp_label.append(2)
+        elif emo_lst[i] == emotion_types[3]:
+            continue
+        elif emo_lst[i] == emotion_types[4]:
+            fp_label.append(3)
+        else:
+            pass
+
+    return np.array(fp_label)
+
+
 class AM_Dataset(torch.utils.data.Dataset):
     """
     provide (ling, emo, speaker, mel) pair
@@ -316,6 +363,9 @@ class AM_Dataset(torch.utils.data.Dataset):
         self.with_duration = True
         self.nsf_enable = self.config["Model"]["KanTtsSAMBERT"]["params"].get(
             "NSF", False
+        )
+        self.fp_enable = self.config["Model"]["KanTtsSAMBERT"]["params"].get(
+            "FP", False
         )
 
         if not isinstance(metafile, list):
@@ -350,7 +400,6 @@ class AM_Dataset(torch.utils.data.Dataset):
     def __len__(self):
         return len(self.meta)
 
-    #  TODO: implement __getitem__
     def __getitem__(self, idx):
         if self.allow_cache and len(self.caches[idx]) != 0:
             return self.caches[idx]
@@ -363,6 +412,7 @@ class AM_Dataset(torch.utils.data.Dataset):
             energy_file,
             frame_f0_file,
             frame_uv_file,
+            aug_ling_txt,
         ) = self.meta[idx]
 
         ling_data = self.ling_unit.encode_symbol_sequence(ling_txt)
@@ -370,6 +420,13 @@ class AM_Dataset(torch.utils.data.Dataset):
         dur_data = np.load(dur_file) if dur_file is not None else None
         f0_data = np.load(f0_file)
         energy_data = np.load(energy_file)
+
+        # generate fp position label according to fpadd_meta
+        if self.fp_enable and aug_ling_txt is not None:
+            fp_label = get_fp_label(aug_ling_txt)
+        else:
+            fp_label = None
+
         if self.with_duration:
             attn_prior = None
         else:
@@ -391,13 +448,31 @@ class AM_Dataset(torch.utils.data.Dataset):
                 f0_data,
                 energy_data,
                 attn_prior,
+                fp_label,
             )
 
-        return (ling_data, mel_data, dur_data, f0_data, energy_data, attn_prior)
+        return (
+            ling_data,
+            mel_data,
+            dur_data,
+            f0_data,
+            energy_data,
+            attn_prior,
+            fp_label,
+        )
 
     def load_meta(self, metafile, data_dir):
         with open(metafile, "r") as f:
             lines = f.readlines()
+
+        aug_ling_dict = {}
+        if self.fp_enable:
+            add_fp_metafile = metafile.replace("fprm", "fpadd")
+            with open(add_fp_metafile, "r") as f:
+                fpadd_lines = f.readlines()
+            for line in fpadd_lines:
+                index, aug_ling_txt = line.split("\t")
+                aug_ling_dict[index] = aug_ling_txt
 
         mel_dir = os.path.join(data_dir, "mel")
         dur_dir = os.path.join(data_dir, "duration")
@@ -422,6 +497,10 @@ class AM_Dataset(torch.utils.data.Dataset):
             energy_file = os.path.join(energy_dir, index + ".npy")
             frame_f0_file = os.path.join(frame_f0_dir, index + ".npy")
             frame_uv_file = os.path.join(frame_uv_dir, index + ".npy")
+            aug_ling_txt = aug_ling_dict.get(index, None)
+            if self.fp_enable and aug_ling_txt is None:
+                logging.warning(f"Missing fpadd meta for {index}")
+                continue
 
             items.append(
                 (
@@ -432,22 +511,45 @@ class AM_Dataset(torch.utils.data.Dataset):
                     energy_file,
                     frame_f0_file,
                     frame_uv_file,
+                    aug_ling_txt,
                 )
             )
 
         return items
 
+    def load_fpadd_meta(self, metafile):
+        with open(metafile, "r") as f:
+            lines = f.readlines()
+
+        items = []
+        logging.info("Loading fpadd metafile...")
+        for line in tqdm(lines):
+            line = line.strip()
+            index, ling_txt = line.split("\t")
+
+            items.append((ling_txt,))
+
+        return items
+
     @staticmethod
-    def gen_metafile(raw_meta_file, out_dir, badlist=None, split_ratio=0.98):
+    def gen_metafile(
+        raw_meta_file,
+        out_dir,
+        train_meta_file,
+        valid_meta_file,
+        badlist=None,
+        split_ratio=0.98,
+    ):
         with open(raw_meta_file, "r") as f:
             lines = f.readlines()
         frame_f0_dir = os.path.join(out_dir, "frame_f0")
         frame_uv_dir = os.path.join(out_dir, "frame_uv")
         mel_dir = os.path.join(out_dir, "mel")
         duration_dir = os.path.join(out_dir, "duration")
+        random.seed(DATASET_RANDOM_SEED)
         random.shuffle(lines)
         num_train = int(len(lines) * split_ratio) - 1
-        with open(os.path.join(out_dir, "am_train.lst"), "w") as f:
+        with open(train_meta_file, "w") as f:
             for line in lines[:num_train]:
                 index = line.split("\t")[0]
                 if badlist is not None and index in badlist:
@@ -461,7 +563,7 @@ class AM_Dataset(torch.utils.data.Dataset):
                     continue
                 f.write(line)
 
-        with open(os.path.join(out_dir, "am_valid.lst"), "w") as f:
+        with open(valid_meta_file, "w") as f:
             for line in lines[num_train:]:
                 index = line.split("\t")[0]
                 if badlist is not None and index in badlist:
@@ -480,6 +582,7 @@ class AM_Dataset(torch.utils.data.Dataset):
         data_dict = {}
 
         max_input_length = max((len(x[0][0]) for x in batch))
+        max_dur_length = max((x[2].shape[0] for x in batch)) + 1
 
         # pure linguistic info: sy|tone|syllable_flag|word_segment
         lfeat_type = self.ling_unit._lfeat_type_list[0]
@@ -528,6 +631,14 @@ class AM_Dataset(torch.utils.data.Dataset):
             self.ling_unit._sub_unit_pad[lfeat_type],
         ).long()
 
+        # fp label category
+        if self.fp_enable:
+            data_dict["fp_label"] = self.padder._prepare_scalar_inputs(
+                [x[6] for x in batch],
+                max_input_length,
+                0,
+            ).long()
+
         data_dict["input_lings"] = torch.stack(
             [inputs_sy, inputs_tone, inputs_syllable_flag, inputs_ws], dim=2
         )
@@ -546,13 +657,16 @@ class AM_Dataset(torch.utils.data.Dataset):
         )
         if self.with_duration:
             data_dict["durations"] = self.padder._prepare_durations(
-                [x[2] for x in batch], max_input_length, max_output_round_length
+                [x[2] for x in batch], max_dur_length, max_output_round_length
             )
         else:
             data_dict["durations"] = None
 
         if self.with_duration:
-            feats_padding_length = max_input_length
+            if self.fp_enable:
+                feats_padding_length = max_dur_length
+            else:
+                feats_padding_length = max_input_length
         else:
             feats_padding_length = max_output_round_length
 
@@ -574,7 +688,6 @@ class AM_Dataset(torch.utils.data.Dataset):
                 data_dict["attn_priors"][
                     i, : attn_prior.shape[0], : attn_prior.shape[1]
                 ] = attn_prior
-
         return data_dict
 
 
@@ -594,11 +707,22 @@ def get_am_datasets(
     train_meta_lst = []
     valid_meta_lst = []
 
+    fp_enable = config["Model"]["KanTtsSAMBERT"]["params"].get("FP", False)
+
+    if fp_enable:
+        am_train_fn = "am_fprm_train.lst"
+        am_valid_fn = "am_fprm_valid.lst"
+    else:
+        am_train_fn = "am_train.lst"
+        am_valid_fn = "am_valid.lst"
+
     for raw_metafile, data_dir in zip(metafile, root_dir):
-        train_meta = os.path.join(data_dir, "am_train.lst")
-        valid_meta = os.path.join(data_dir, "am_valid.lst")
+        train_meta = os.path.join(data_dir, am_train_fn)
+        valid_meta = os.path.join(data_dir, am_valid_fn)
         if not os.path.exists(train_meta) or not os.path.exists(valid_meta):
-            AM_Dataset.gen_metafile(raw_metafile, data_dir, split_ratio)
+            AM_Dataset.gen_metafile(
+                raw_metafile, data_dir, train_meta, valid_meta, split_ratio
+            )
         train_meta_lst.append(train_meta)
         valid_meta_lst.append(valid_meta)
 
@@ -748,6 +872,7 @@ class BERT_Text_Dataset(torch.utils.data.Dataset):
     def gen_metafile(raw_meta_file, out_dir, split_ratio=0.98):
         with open(raw_meta_file, "r") as f:
             lines = f.readlines()
+        random.seed(DATASET_RANDOM_SEED)
         random.shuffle(lines)
         num_train = int(len(lines) * split_ratio) - 1
         with open(os.path.join(out_dir, "bert_train.lst"), "w") as f:

@@ -56,8 +56,6 @@ def train(
     if not isinstance(root_dir, list):
         root_dir = [root_dir]
 
-    meta_file = [os.path.join(d, "raw_metafile.txt") for d in root_dir]
-
     if local_rank == 0 and not os.path.exists(stage_dir):
         os.makedirs(stage_dir)
 
@@ -84,6 +82,11 @@ def train(
         config["rank"] = torch.distributed.get_rank()
         config["distributed"] = True
 
+    fp_enable = config["Model"]["KanTtsSAMBERT"]["params"].get("FP", False)
+    meta_file = [
+        os.path.join(d, "raw_metafile.txt" if not fp_enable else "fprm_metafile.txt")
+        for d in root_dir
+    ]
     #  TODO: abstract dataloader
     # Dataset prepare
     train_dataset, valid_dataset = get_am_datasets(
@@ -209,7 +212,10 @@ if __name__ == "__main__":
         "--resume_path", type=str, default=None, help="path to resume checkpoint"
     )
     parser.add_argument(
-        "--resume_bert_path", type=str, default=None, help="path to resume pretrained-bert checkpoint"
+        "--resume_bert_path",
+        type=str,
+        default=None,
+        help="path to resume pretrained-bert checkpoint",
     )
     parser.add_argument(
         "--local_rank", type=int, default=0, help="local rank for distributed training"

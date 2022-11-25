@@ -423,7 +423,6 @@ class TextScriptConvertor:
     def process(self, textScriptPath, outputXMLPath, outputMetafile):
         script = Script(self.m_phoneset, self.m_posset)
         formatted_lines = format_prosody(textScriptPath)
-
         line_num = 0
         for line in tqdm(formatted_lines):
             if line_num % 2 == 0:

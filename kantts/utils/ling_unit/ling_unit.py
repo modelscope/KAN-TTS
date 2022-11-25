@@ -21,6 +21,25 @@ def _clean_text(text, cleaner_names):
     return text
 
 
+def get_fpdict(config):
+    # eomtion_neutral(F7) can be other emotion(speaker) types in the corresponding list in config file.
+    en_sy = "{ge$tone5$s_begin$word_begin$emotion_neutral$F7} {en_c$tone5$s_end$word_end$emotion_neutral$F7} {#3$tone_none$s_none$word_none$emotion_neutral$F7}"  # NOQA: E501
+    a_sy = "{ga$tone5$s_begin$word_begin$emotion_neutral$F7} {a_c$tone5$s_end$word_end$emotion_neutral$F7} {#3$tone_none$s_none$word_none$emotion_neutral$F7}"  # NOQA: E501
+    e_sy = "{ge$tone5$s_begin$word_begin$emotion_neutral$F7} {e_c$tone5$s_end$word_end$emotion_neutral$F7} {#3$tone_none$s_none$word_none$emotion_neutral$F7}"  # NOQA: E501
+    ling_unit = KanTtsLinguisticUnit(config)
+
+    en_lings = ling_unit.encode_symbol_sequence(en_sy)
+    a_lings = ling_unit.encode_symbol_sequence(a_sy)
+    e_lings = ling_unit.encode_symbol_sequence(e_sy)
+
+    en_ling = np.stack(en_lings, axis=1)[:3, :4]
+    a_ling = np.stack(a_lings, axis=1)[:3, :4]
+    e_ling = np.stack(e_lings, axis=1)[:3, :4]
+
+    fp_dict = {1: a_ling, 2: en_ling, 3: e_ling}
+    return fp_dict
+
+
 class LinguisticBaseUnit(abc.ABC):
     def set_config_params(self, config_params):
         self.config_params = config_params
@@ -47,7 +66,12 @@ class KanTtsLinguisticUnit(LinguisticBaseUnit):
         self._cleaner_names = [
             x.strip() for x in self.unit_config["cleaners"].split(",")
         ]
-        self._lfeat_type_list = self.unit_config["lfeat_type_list"].strip().split(",")
+        _lfeat_type_list = self.unit_config["lfeat_type_list"].strip().split(",")
+        self._lfeat_type_list = _lfeat_type_list
+
+        self.fp_enable = config["Model"]["KanTtsSAMBERT"]["params"].get("FP", False)
+        if self.fp_enable:
+            self._fpadd_lfeat_type_list = [_lfeat_type_list[0], _lfeat_type_list[4]]
 
         self.build()
 

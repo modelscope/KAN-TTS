@@ -85,6 +85,26 @@ class ProsodyReconLoss(torch.nn.Module):
         return dur_loss, pitch_loss, energy_loss
 
 
+class FpCELoss(torch.nn.Module):
+    def __init__(self, loss_type="ce", weight=[1, 4, 4, 8]):
+        super(FpCELoss, self).__init__()
+        self.loss_type = loss_type
+        weight_ce = torch.FloatTensor(weight).cuda()
+        self.criterion = torch.nn.CrossEntropyLoss(weight=weight_ce, reduction="none")
+
+    def forward(self, input_lengths, fp_pd, fp_label):
+        input_masks = get_mask_from_lengths(input_lengths, max_len=fp_label.size(1))
+        input_masks = ~input_masks
+        valid_inputs = input_masks.sum()
+
+        fp_loss = (
+            torch.sum(self.criterion(fp_pd.transpose(2, 1), fp_label) * input_masks)
+            / valid_inputs
+        )
+
+        return fp_loss
+
+
 class GeneratorAdversarialLoss(torch.nn.Module):
     """Generator adversarial loss module."""
 
@@ -501,6 +521,7 @@ loss_dict = {
     "SeqCELoss": SeqCELoss,
     "AttentionBinarizationLoss": AttentionBinarizationLoss,
     "AttentionCTCLoss": AttentionCTCLoss,
+    "FpCELoss": FpCELoss,
 }
 
 

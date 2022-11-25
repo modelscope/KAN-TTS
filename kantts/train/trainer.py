@@ -707,6 +707,7 @@ class Sambert_Trainer(Trainer):
             grad_clip,
         )
         self.with_MAS = config["Model"]["KanTtsSAMBERT"]["params"].get("MAS", False)
+        self.fp_enable = config["Model"]["KanTtsSAMBERT"]["params"].get("FP", False)
 
     @torch.no_grad()
     def genearete_and_save_intermediate_result(self, batch):
@@ -715,7 +716,6 @@ class Sambert_Trainer(Trainer):
         inputs_speaker = batch["input_speakers"].to(self.device)
         valid_input_lengths = batch["valid_input_lengths"].to(self.device)
         mel_targets = batch["mel_targets"].to(self.device)
-
         # generate mel spectrograms
         res = self.model["KanTtsSAMBERT"](
             inputs_ling[0:1],
@@ -811,7 +811,9 @@ class Sambert_Trainer(Trainer):
             if batch["attn_priors"] is not None
             else None
         )
-
+        fp_label = None
+        if self.fp_enable:
+            fp_label = batch["fp_label"].to(self.device)
         # generate mel spectrograms
         res = self.model["KanTtsSAMBERT"](
             inputs_ling,
@@ -824,6 +826,7 @@ class Sambert_Trainer(Trainer):
             pitch_targets=pitch_contours,
             energy_targets=energy_contours,
             attn_priors=attn_priors,
+            fp_label=fp_label,
         )
 
         x_band_width = res["x_band_width"]
@@ -836,13 +839,15 @@ class Sambert_Trainer(Trainer):
         duration_targets = res["duration_targets"]
         pitch_targets = res["pitch_targets"]
         energy_targets = res["energy_targets"]
+        fp_predictions = res["fp_predictions"]
+        valid_inter_lengths = res["valid_inter_lengths"]
 
         mel_loss_, mel_loss = self.criterion["MelReconLoss"](
             valid_output_lengths, mel_targets, dec_outputs, postnet_outputs
         )
 
         dur_loss, pitch_loss, energy_loss = self.criterion["ProsodyReconLoss"](
-            valid_input_lengths,
+            valid_inter_lengths,
             duration_targets,
             pitch_targets,
             energy_targets,
@@ -851,6 +856,11 @@ class Sambert_Trainer(Trainer):
             energy_predictions,
         )
         loss_total = mel_loss_ + mel_loss + dur_loss + pitch_loss + energy_loss
+        if self.fp_enable:
+            fp_loss = self.criterion["FpCELoss"](
+                valid_input_lengths, fp_predictions, fp_label
+            )
+            loss_total = loss_total + fp_loss
 
         if self.with_MAS:
             attn_soft = res["attn_soft"]
@@ -873,6 +883,8 @@ class Sambert_Trainer(Trainer):
         self.total_eval_loss["eval/dur_loss"] += dur_loss.item()
         self.total_eval_loss["eval/pitch_loss"] += pitch_loss.item()
         self.total_eval_loss["eval/energy_loss"] += energy_loss.item()
+        if self.fp_enable:
+            self.total_eval_loss["eval/fp_loss"] += fp_loss.item()
         self.total_eval_loss["eval/batch_size"] += mel_targets.size(0)
         self.total_eval_loss["eval/x_band_width"] += x_band_width
         self.total_eval_loss["eval/h_band_width"] += h_band_width
@@ -896,6 +908,9 @@ class Sambert_Trainer(Trainer):
             if batch["attn_priors"] is not None
             else None
         )
+        fp_label = None
+        if self.fp_enable:
+            fp_label = batch["fp_label"].to(self.device)
 
         # generate mel spectrograms
         res = self.model["KanTtsSAMBERT"](
@@ -909,6 +924,7 @@ class Sambert_Trainer(Trainer):
             pitch_targets=pitch_contours,
             energy_targets=energy_contours,
             attn_priors=attn_priors,
+            fp_label=fp_label,
         )
 
         x_band_width = res["x_band_width"]
@@ -922,13 +938,15 @@ class Sambert_Trainer(Trainer):
         duration_targets = res["duration_targets"]
         pitch_targets = res["pitch_targets"]
         energy_targets = res["energy_targets"]
+        fp_predictions = res["fp_predictions"]
+        valid_inter_lengths = res["valid_inter_lengths"]
 
         mel_loss_, mel_loss = self.criterion["MelReconLoss"](
             valid_output_lengths, mel_targets, dec_outputs, postnet_outputs
         )
 
         dur_loss, pitch_loss, energy_loss = self.criterion["ProsodyReconLoss"](
-            valid_input_lengths,
+            valid_inter_lengths,
             duration_targets,
             pitch_targets,
             energy_targets,
@@ -937,6 +955,11 @@ class Sambert_Trainer(Trainer):
             energy_predictions,
         )
         loss_total = mel_loss_ + mel_loss + dur_loss + pitch_loss + energy_loss
+        if self.fp_enable:
+            fp_loss = self.criterion["FpCELoss"](
+                valid_input_lengths, fp_predictions, fp_label
+            )
+            loss_total = loss_total + fp_loss
 
         if self.with_MAS:
             attn_soft = res["attn_soft"]
@@ -959,6 +982,8 @@ class Sambert_Trainer(Trainer):
         self.total_train_loss["train/dur_loss"] += dur_loss.item()
         self.total_train_loss["train/pitch_loss"] += pitch_loss.item()
         self.total_train_loss["train/energy_loss"] += energy_loss.item()
+        if self.fp_enable:
+            self.total_train_loss["train/fp_loss"] += fp_loss.item()
         self.total_train_loss["train/batch_size"] += mel_targets.size(0)
         self.total_train_loss["train/x_band_width"] += x_band_width
         self.total_train_loss["train/h_band_width"] += h_band_width
