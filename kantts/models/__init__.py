@@ -8,10 +8,8 @@ from kantts.models.hifigan.hifigan import (  # NOQA
 )
 import kantts
 import kantts.train.scheduler
-from kantts.models.sambert.kantts_sambert import (
-    KanTtsSAMBERT,  # NOQA
-    KanTtsTextsyBERT
-)
+from kantts.models.sambert.kantts_sambert import KanTtsSAMBERT, KanTtsTextsyBERT  # NOQA
+from kantts.utils.ling_unit.ling_unit import get_fpdict
 from .pqmf import PQMF
 
 
@@ -97,6 +95,15 @@ def sambert_model_builder(config, device, rank, distributed):
     model["KanTtsSAMBERT"] = KanTtsSAMBERT(
         config["Model"]["KanTtsSAMBERT"]["params"]
     ).to(device)
+
+    fp_enable = config["Model"]["KanTtsSAMBERT"]["params"].get("FP", False)
+    if fp_enable:
+        fp_dict = {
+            k: torch.from_numpy(v).long().unsqueeze(0).to(device)
+            for k, v in get_fpdict(config).items()
+        }
+        model["KanTtsSAMBERT"].fp_dict = fp_dict
+
     optimizer["KanTtsSAMBERT"] = optimizer_builder(
         model["KanTtsSAMBERT"].parameters(),
         config["Model"]["KanTtsSAMBERT"]["optimizer"].get("type", "Adam"),

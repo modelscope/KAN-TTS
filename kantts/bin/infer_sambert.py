@@ -42,7 +42,10 @@ def am_synthesis(symbol_seq, fsnet, ling_unit, device):
     )  # minus 1 for "~"
 
     res = fsnet(
-        inputs_ling[:, :-1, :], inputs_emo[:, :-1], inputs_spk[:, :-1], inputs_len
+        inputs_ling[:, :-1, :],
+        inputs_emo[:, :-1],
+        inputs_spk[:, :-1],
+        inputs_len,
     )
     x_band_width = res["x_band_width"]
     h_band_width = res["h_band_width"]
@@ -135,6 +138,7 @@ if __name__ == "__main__":
     parser.add_argument("--sentence", type=str, required=True)
     parser.add_argument("--output_dir", type=str, required=True)
     parser.add_argument("--ckpt", type=str, required=True)
+
     args = parser.parse_args()
 
     am_infer(args.sentence, args.ckpt, args.output_dir)

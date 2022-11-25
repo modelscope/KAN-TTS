@@ -4,6 +4,7 @@ import sys
 import argparse
 import yaml
 import time
+import codecs
 
 ROOT_PATH = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # NOQA: E402
 sys.path.insert(0, os.path.dirname(ROOT_PATH))  # NOQA: E402
@@ -13,6 +14,7 @@ try:
     from kantts.preprocess.script_convertor.TextScriptConvertor import (
         TextScriptConvertor,
     )
+    from kantts.preprocess.fp_processor import FpProcessor, is_fp_line
     from kantts.datasets.dataset import AM_Dataset, Voc_Dataset
     from kantts.utils.log import logging_to_file, get_git_revision_hash
 except ImportError:
@@ -38,6 +40,7 @@ languages = {
 
 def gen_metafile(
     voice_output_dir,
+    fp_enable=False,
     badlist=None,
     split_ratio=0.98,
 ):
@@ -56,8 +59,44 @@ def gen_metafile(
     am_train_meta = os.path.join(voice_output_dir, "am_train.lst")
     am_valid_meta = os.path.join(voice_output_dir, "am_valid.lst")
     if not os.path.exists(am_train_meta) or not os.path.exists(am_valid_meta):
-        AM_Dataset.gen_metafile(raw_metafile, voice_output_dir, badlist, split_ratio)
+        AM_Dataset.gen_metafile(
+            raw_metafile,
+            voice_output_dir,
+            am_train_meta,
+            am_valid_meta,
+            badlist,
+            split_ratio,
+        )
         logging.info("AM metafile generated.")
+
+    if fp_enable:
+        fpadd_metafile = os.path.join(voice_output_dir, "fpadd_metafile.txt")
+        am_train_meta = os.path.join(voice_output_dir, "am_fpadd_train.lst")
+        am_valid_meta = os.path.join(voice_output_dir, "am_fpadd_valid.lst")
+        if not os.path.exists(am_train_meta) or not os.path.exists(am_valid_meta):
+            AM_Dataset.gen_metafile(
+                fpadd_metafile,
+                voice_output_dir,
+                am_train_meta,
+                am_valid_meta,
+                badlist,
+                split_ratio,
+            )
+            logging.info("AM fpaddmetafile generated.")
+
+        fprm_metafile = os.path.join(voice_output_dir, "fprm_metafile.txt")
+        am_train_meta = os.path.join(voice_output_dir, "am_fprm_train.lst")
+        am_valid_meta = os.path.join(voice_output_dir, "am_fprm_valid.lst")
+        if not os.path.exists(am_train_meta) or not os.path.exists(am_valid_meta):
+            AM_Dataset.gen_metafile(
+                fprm_metafile,
+                voice_output_dir,
+                am_train_meta,
+                am_valid_meta,
+                badlist,
+                split_ratio,
+            )
+            logging.info("AM fprmmetafile generated.")
 
 
 #  TODO: Zh-CN as default
@@ -120,6 +159,22 @@ def process_data(
             os.path.join(voice_output_dir, "raw_metafile.txt"),
         )
         raw_metafile = os.path.join(voice_output_dir, "raw_metafile.txt")
+        prosody = os.path.join(voice_input_dir, "prosody", "prosody.txt")
+
+    # FP processor
+    with codecs.open(prosody, "r", "utf-8") as f:
+        lines = f.readlines()
+        fp_enable = is_fp_line(lines[1])
+
+    if fp_enable:
+        FP = FpProcessor()
+
+        FP.process(
+            voice_output_dir,
+            prosody,
+            raw_metafile,
+        )
+        logging.info("Processing fp done.")
 
     #  Audio processor
     ap = AudioProcessor(config["audio_config"])
@@ -133,7 +188,7 @@ def process_data(
 
     # Generate Voc&AM metafile
     # TODO: train/valid ratio setting
-    gen_metafile(voice_output_dir, ap.badcase_list)
+    gen_metafile(voice_output_dir, fp_enable, ap.badcase_list)
 
 
 if __name__ == "__main__":

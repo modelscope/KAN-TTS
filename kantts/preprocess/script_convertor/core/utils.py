@@ -87,12 +87,28 @@ def do_prosody_text_normalization(line):
     return tokens[0] + "\t" + text
 
 
+def is_fp_line(line):
+    fp_category_list = ["FP", "I", "N", "Q"]
+    elements = line.strip().split(" ")
+    res = True
+    for ele in elements:
+        if ele not in fp_category_list:
+            res = False
+            break
+    return res
+
+
 def format_prosody(src_prosody):
     formatted_lines = []
     with codecs.open(src_prosody, "r", "utf-8") as f:
         lines = f.readlines()
-        for line in lines:
-            line = do_character_normalization(line)
+        fp_enable = is_fp_line(lines[1])
+
+        for i in range(0, len(lines)):
+            line = do_character_normalization(lines[i])
+            if fp_enable:
+                if i % 5 == 1 or i % 5 == 2 or i % 5 == 3:
+                    continue
             if len(line.strip().split("\t")) == 2:
                 line = do_prosody_text_normalization(line)
             formatted_lines.append(line)

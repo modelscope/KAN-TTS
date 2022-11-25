@@ -590,7 +590,6 @@ class MelPNCADecoder(nn.Module):
                         pnca_x_attn = torch.cat([pnca_x_attn, padding], dim=-1)
                     dec_pnca_attn_x_list[layer_id].append(pnca_x_attn)
                     dec_pnca_attn_h_list[layer_id].append(pnca_h_attn)
-
             dec_output = torch.cat(dec_output, dim=1)
             for layer_id in range(self.nb_layers):
                 dec_pnca_attn_x_list[layer_id] = torch.cat(
@@ -665,6 +664,41 @@ def average_frame_feat(pitch, durs):
     return pitch_avg
 
 
+class FP_Predictor(nn.Module):
+    def __init__(self, config):
+        super(FP_Predictor, self).__init__()
+
+        self.w_1 = nn.Conv1d(
+            config["encoder_projection_units"],
+            config["embedding_dim"] // 2,
+            kernel_size=3,
+            padding=1,
+        )
+        self.w_2 = nn.Conv1d(
+            config["embedding_dim"] // 2,
+            config["encoder_projection_units"],
+            kernel_size=1,
+            padding=0,
+        )
+        self.layer_norm1 = nn.LayerNorm(config["embedding_dim"] // 2, eps=1e-6)
+        self.layer_norm2 = nn.LayerNorm(config["encoder_projection_units"], eps=1e-6)
+        self.dropout_inner = nn.Dropout(0.1)
+        self.dropout = nn.Dropout(0.1)
+        self.fc = nn.Linear(config["encoder_projection_units"], 4)
+
+    def forward(self, x):
+        x = x.transpose(1, 2)
+        x = F.relu(self.w_1(x))
+        x = x.transpose(1, 2)
+        x = self.dropout_inner(self.layer_norm1(x))
+        x = x.transpose(1, 2)
+        x = F.relu(self.w_2(x))
+        x = x.transpose(1, 2)
+        x = self.dropout(self.layer_norm2(x))
+        output = F.softmax(self.fc(x), dim=2)
+        return output
+
+
 class KanTtsSAMBERT(nn.Module):
     def __init__(self, config):
         super(KanTtsSAMBERT, self).__init__()
@@ -683,6 +717,9 @@ class KanTtsSAMBERT(nn.Module):
                 n_text_channels=config["embedding_dim"],
                 n_att_channels=config["num_mels"],
             )
+        self.fp_enable = config.get("FP", False)
+        if self.fp_enable:
+            self.FP_predictor = FP_Predictor(config)
 
     def get_lfr_mask_from_lengths(self, lengths, max_len):
         batch_size = lengths.size(0)
@@ -714,6 +751,102 @@ class KanTtsSAMBERT(nn.Module):
             )
         return torch.from_numpy(attn_out).to(attn.get_device())
 
+    def insert_fp(
+        self,
+        text_hid,
+        FP_p,
+        fp_label,
+        fp_dict,
+        inputs_emotion,
+        inputs_speaker,
+        input_lengths,
+        input_masks,
+    ):
+
+        en, _, _ = self.text_encoder(fp_dict[1], return_attns=True)
+        a, _, _ = self.text_encoder(fp_dict[2], return_attns=True)
+        e, _, _ = self.text_encoder(fp_dict[3], return_attns=True)
+
+        en = en.squeeze()
+        a = a.squeeze()
+        e = e.squeeze()
+
+        max_len_ori = max(input_lengths)
+        if fp_label is None:
+            input_masks_r = ~input_masks
+            fp_mask = (FP_p == FP_p.max(dim=2, keepdim=True)[0]).to(dtype=torch.int32)
+            fp_mask = fp_mask[:, :, 1:] * input_masks_r.unsqueeze(2).expand(-1, -1, 3)
+            fp_number = torch.sum(torch.sum(fp_mask, dim=2), dim=1)
+        else:
+            fp_number = torch.sum((fp_label > 0), dim=1)
+        inter_lengths = input_lengths + 3 * fp_number
+        max_len = max(inter_lengths)
+
+        delta = max_len - max_len_ori
+        if delta > 0:
+            if delta > text_hid.shape[1]:
+                nrepeat = delta // text_hid.shape[1]
+                bias = delta % text_hid.shape[1]
+                text_hid = torch.cat(
+                    (text_hid, text_hid.repeat(1, nrepeat, 1), text_hid[:, :bias, :]), 1
+                )
+                inputs_emotion = torch.cat(
+                    (
+                        inputs_emotion,
+                        inputs_emotion.repeat(1, nrepeat),
+                        inputs_emotion[:, :bias],
+                    ),
+                    1,
+                )
+                inputs_speaker = torch.cat(
+                    (
+                        inputs_speaker,
+                        inputs_speaker.repeat(1, nrepeat),
+                        inputs_speaker[:, :bias],
+                    ),
+                    1,
+                )
+            else:
+                text_hid = torch.cat((text_hid, text_hid[:, :delta, :]), 1)
+                inputs_emotion = torch.cat(
+                    (inputs_emotion, inputs_emotion[:, :delta]), 1
+                )
+                inputs_speaker = torch.cat(
+                    (inputs_speaker, inputs_speaker[:, :delta]), 1
+                )
+
+        if fp_label is None:
+            for i in range(fp_mask.shape[0]):
+                for j in range(fp_mask.shape[1] - 1, -1, -1):
+                    if fp_mask[i][j][0] == 1:
+                        text_hid[i] = torch.cat(
+                            (text_hid[i][:j], en, text_hid[i][j:-3]), 0
+                        )
+                    elif fp_mask[i][j][1] == 1:
+                        text_hid[i] = torch.cat(
+                            (text_hid[i][:j], a, text_hid[i][j:-3]), 0
+                        )
+                    elif fp_mask[i][j][2] == 1:
+                        text_hid[i] = torch.cat(
+                            (text_hid[i][:j], e, text_hid[i][j:-3]), 0
+                        )
+        else:
+            for i in range(fp_label.shape[0]):
+                for j in range(fp_label.shape[1] - 1, -1, -1):
+                    if fp_label[i][j] == 1:
+                        text_hid[i] = torch.cat(
+                            (text_hid[i][:j], en, text_hid[i][j:-3]), 0
+                        )
+                    elif fp_label[i][j] == 2:
+                        text_hid[i] = torch.cat(
+                            (text_hid[i][:j], a, text_hid[i][j:-3]), 0
+                        )
+                    elif fp_label[i][j] == 3:
+                        text_hid[i] = torch.cat(
+                            (text_hid[i][:j], e, text_hid[i][j:-3]), 0
+                        )
+        return text_hid, inputs_emotion, inputs_speaker, inter_lengths
+
     def forward(
         self,
         inputs_ling,
@@ -726,8 +859,8 @@ class KanTtsSAMBERT(nn.Module):
         pitch_targets=None,
         energy_targets=None,
         attn_priors=None,
+        fp_label=None,
     ):
-
         batch_size = inputs_ling.size(0)
 
         is_training = mel_targets is not None
@@ -736,6 +869,22 @@ class KanTtsSAMBERT(nn.Module):
         text_hid, enc_sla_attn_lst, ling_embedding = self.text_encoder(
             inputs_ling, input_masks, return_attns=True
         )
+
+        inter_lengths = input_lengths
+        FP_p = None
+        if self.fp_enable:
+            FP_p = self.FP_predictor(text_hid)
+            fp_dict = self.fp_dict
+            text_hid, inputs_emotion, inputs_speaker, inter_lengths = self.insert_fp(
+                text_hid,
+                FP_p,
+                fp_label,
+                fp_dict,
+                inputs_emotion,
+                inputs_speaker,
+                input_lengths,
+                input_masks,
+            )
 
         # Monotonic-Alignment-Search
         if self.MAS and is_training:
@@ -766,6 +915,8 @@ class KanTtsSAMBERT(nn.Module):
         emo_hid = self.emo_tokenizer(inputs_emotion)
         spk_hid = self.spk_tokenizer(inputs_speaker)
 
+        inter_masks = get_mask_from_lengths(inter_lengths, max_len=text_hid.size(1))
+
         if output_lengths is not None:
             output_masks = get_mask_from_lengths(
                 output_lengths, max_len=mel_targets.size(1)
@@ -785,7 +936,7 @@ class KanTtsSAMBERT(nn.Module):
             text_hid,
             emo_hid,
             spk_hid,
-            masks=input_masks,
+            masks=inter_masks,
             output_masks=output_masks,
             duration_targets=duration_targets,
             pitch_targets=pitch_targets,
@@ -817,7 +968,7 @@ class KanTtsSAMBERT(nn.Module):
 
         if duration_targets is not None:
             x_band_width = int(
-                duration_targets.float().masked_fill(input_masks, 0).max()
+                duration_targets.float().masked_fill(inter_masks, 0).max()
                 / self.mel_decoder.r
                 + 0.5
             )
@@ -865,6 +1016,8 @@ class KanTtsSAMBERT(nn.Module):
             "duration_targets": duration_targets,
             "pitch_targets": pitch_targets,
             "energy_targets": energy_targets,
+            "fp_predictions": FP_p,
+            "valid_inter_lengths": inter_lengths,
         }
 
         res["LR_text_outputs"] = LR_text_outputs
