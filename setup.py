@@ -1,9 +1,34 @@
 from setuptools import find_packages, setup
+import codecs
 
 version = "0.0.1"
 
 with open("README.md", "r", encoding="utf-8") as readme_file:
     README = readme_file.read()
+
+
+def parse_requirements(fname='requirements.txt'):
+    """Parse the package dependencies listed in a requirements file."""
+
+    def parse_line(line):
+        """Parse information from a line in a requirements text file."""
+        if line.startswith('-r '):
+            target = line.split(' ')[1]
+            for line in parse_require_file(target):
+                yield line
+        else:
+            yield line
+
+    def parse_require_file(fpath):
+        with codecs.open(fpath, 'r') as f:
+            for line in f.readlines():
+                line = line.strip()
+                if line and not line.startswith('#'):
+                    for ll in parse_line(line):
+                        yield ll
+
+    packages = list(parse_require_file(fname))
+    return packages
 
 setup(
     name="kantts",
@@ -44,5 +69,6 @@ setup(
         "Topic :: Multimedia",
         "Topic :: Scientific/Engineering :: Artificial Intelligence",
     ],
+    install_requires=parse_requirements('requirements/runtime.txt'),
     zip_safe=False,
 )
