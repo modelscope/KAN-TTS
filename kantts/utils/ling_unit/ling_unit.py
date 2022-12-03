@@ -5,8 +5,8 @@ import re
 import numpy as np
 
 from . import cleaners as cleaners
-from .ch_symbols import ch_symbols, ch_tones, ch_syllable_flags, ch_word_segments
 from .emotion_types import emotion_types
+from .lang_symbols import get_language_symbols
 
 # Regular expression matching text enclosed in curly braces:
 _curly_re = re.compile(r"(.*?)\{(.+?)\}(.*)")
@@ -62,6 +62,13 @@ class KanTtsLinguisticUnit(LinguisticBaseUnit):
         self._mask = "@[MASK]"
 
         self.unit_config = config["linguistic_unit"]
+        self.lang_type = self.unit_config.get("language", "PinYin")
+        (
+            self.lang_phones,
+            self.lang_tones,
+            self.lang_syllable_flags,
+            self.lang_word_segments,
+        ) = get_language_symbols(self.lang_type)
 
         self._cleaner_names = [
             x.strip() for x in self.unit_config["cleaners"].split(",")
@@ -98,7 +105,7 @@ class KanTtsLinguisticUnit(LinguisticBaseUnit):
 
         # Prepend "@" to ARPAbet symbols to ensure uniqueness (some are the same as uppercase letters):
         # _arpabet = ['@' + s for s in cmudict.valid_symbols]
-        _arpabet = ["@" + s for s in ch_symbols]
+        _arpabet = ["@" + s for s in self.lang_phones]
 
         # Export all symbols:
         self.sy = list(_characters) + _arpabet + [self._pad, self._eos, self._mask]
@@ -111,7 +118,9 @@ class KanTtsLinguisticUnit(LinguisticBaseUnit):
         _characters = ""
 
         # Export all tones:
-        self.tone = list(_characters) + ch_tones + [self._pad, self._eos, self._mask]
+        self.tone = (
+            list(_characters) + self.lang_tones + [self._pad, self._eos, self._mask]
+        )
         self._tone_to_id = {s: i for i, s in enumerate(self.tone)}
         self._id_to_tone = {i: s for i, s in enumerate(self.tone)}
         self._sub_unit_dim["tone"] = len(self.tone)
@@ -122,7 +131,9 @@ class KanTtsLinguisticUnit(LinguisticBaseUnit):
 
         # Export all syllable_flags:
         self.syllable_flag = (
-            list(_characters) + ch_syllable_flags + [self._pad, self._eos, self._mask]
+            list(_characters)
+            + self.lang_syllable_flags
+            + [self._pad, self._eos, self._mask]
         )
         self._syllable_flag_to_id = {s: i for i, s in enumerate(self.syllable_flag)}
         self._id_to_syllable_flag = {i: s for i, s in enumerate(self.syllable_flag)}
@@ -134,7 +145,9 @@ class KanTtsLinguisticUnit(LinguisticBaseUnit):
 
         # Export all syllable_flags:
         self.word_segment = (
-            list(_characters) + ch_word_segments + [self._pad, self._eos, self._mask]
+            list(_characters)
+            + self.lang_word_segments
+            + [self._pad, self._eos, self._mask]
         )
         self._word_segment_to_id = {s: i for i, s in enumerate(self.word_segment)}
         self._id_to_word_segment = {i: s for i, s in enumerate(self.word_segment)}

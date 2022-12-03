@@ -161,6 +161,92 @@ class ZhHKSyllableFormatter:
             return False
 
 
+class WuuShanghaiSyllableFormatter:
+    def __init__(self, sy2ph_map):
+        self.m_sy2ph_map = sy2ph_map
+
+    def Format(self, phoneset, pronText, syllable_list):
+        if phoneset is None or syllable_list is None or pronText is None:
+            logging.error("WuuShanghaiSyllableFormatter.Format: invalid input")
+            return False
+
+        match = RegexPron.search(pronText)
+        if match:
+            pron = match.group("Pron")
+            tone = match.group("Tone")
+        else:
+            logging.error(
+                "WuuShanghaiSyllableFormatter.Format: pronunciation is not valid: %s",
+                pronText,
+            )
+            return False
+
+        if pron in self.m_sy2ph_map:
+            phone_list = self.m_sy2ph_map[pron].split(" ")
+            if len(phone_list) in [1, 2]:
+                syll = Syllable()
+                for phone in phone_list:
+                    syll.m_phone_list.append(phone)
+                syll.m_tone = Tone.parse(tone)
+                syll.m_language = Language.WuuShanghai
+                syllable_list.append(syll)
+                return True
+            else:
+                logging.error(
+                    "WuuShanghaiSyllableFormatter.Format: invalid phone: %s", pron
+                )
+                return False
+        else:
+            logging.error(
+                "WuuShanghaiSyllableFormatter.Format: syllable to phone map missing key: %s",
+                pron,
+            )
+            return False
+
+
+class SichuanSyllableFormatter:
+    def __init__(self, sy2ph_map):
+        self.m_sy2ph_map = sy2ph_map
+
+    def Format(self, phoneset, pronText, syllable_list):
+        if phoneset is None or syllable_list is None or pronText is None:
+            logging.error("SichuanSyllableFormatter.Format: invalid input")
+            return False
+
+        match = RegexPron.search(pronText)
+        if match:
+            pron = match.group("Pron")
+            tone = match.group("Tone")
+        else:
+            logging.error(
+                "SichuanSyllableFormatter.Format: pronunciation is not valid: %s",
+                pronText,
+            )
+            return False
+
+        if pron in self.m_sy2ph_map:
+            phone_list = self.m_sy2ph_map[pron].split(" ")
+            if len(phone_list) in [1, 2]:
+                syll = Syllable()
+                for phone in phone_list:
+                    syll.m_phone_list.append(phone)
+                syll.m_tone = Tone.parse(tone)
+                syll.m_language = Language.Sichuan
+                syllable_list.append(syll)
+                return True
+            else:
+                logging.error(
+                    "SichuanSyllableFormatter.Format: invalid phone: %s", pron
+                )
+                return False
+        else:
+            logging.error(
+                "SichuanSyllableFormatter.Format: syllable to phone map missing key: %s",
+                pron,
+            )
+            return False
+
+
 class EnXXSyllableFormatter:
     def __init__(self, language):
         self.m_f2t_map = None
