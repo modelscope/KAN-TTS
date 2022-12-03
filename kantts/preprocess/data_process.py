@@ -15,6 +15,7 @@ try:
         TextScriptConvertor,
     )
     from kantts.preprocess.fp_processor import FpProcessor, is_fp_line
+    from kantts.preprocess.languages import languages
     from kantts.datasets.dataset import AM_Dataset, Voc_Dataset
     from kantts.utils.log import logging_to_file, get_git_revision_hash
 except ImportError:
@@ -27,15 +28,6 @@ logging.basicConfig(
 )
 
 LANGUAGES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "languages")
-
-languages = {
-    "PinYin": {
-        "phoneset_path": "PhoneSet.xml",
-        "posset_path": "PosSet.xml",
-        "f2t_map_path": "En2ChPhoneMap.txt",
-        "s2p_map_path": "py2phoneMap.txt",
-    }
-}
 
 
 def gen_metafile(
@@ -105,9 +97,9 @@ def process_data(
     voice_output_dir,
     audio_config,
     speaker_name=None,
+    targetLang="PinYin",
     skip_script=False,
 ):
-    targetLang = "PinYin"
     foreignLang = "EnUS"
     #  TODO: check if the vocie is supported
     emo_tag_path = None
@@ -197,6 +189,7 @@ if __name__ == "__main__":
     parser.add_argument("--voice_output_dir", type=str, required=True)
     parser.add_argument("--audio_config", type=str, required=True)
     parser.add_argument("--speaker", type=str, default=None, help="speaker")
+    parser.add_argument("--lang", type=str, default="PinYin", help="target language")
     parser.add_argument(
         "--skip_script", action="store_true", help="skip script converting"
     )
@@ -211,6 +204,7 @@ if __name__ == "__main__":
             args.voice_output_dir,
             args.audio_config,
             args.speaker,
+            args.lang,
             args.skip_script,
         )
     except (Exception, KeyboardInterrupt) as e:

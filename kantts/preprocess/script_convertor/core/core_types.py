@@ -78,6 +78,8 @@ class Language(Enum):
     EnGB = 2057
     ZhCN = 2052
     PinYin = 2053
+    WuuShanghai = 2054
+    Sichuan = 2055
     ZhHK = 3076
     ZhEn = ZhCN | EnUS
 
@@ -96,6 +98,10 @@ class Language(Enum):
             return Language.ZhCN
         elif in_str in ["PinYin", "2053"]:
             return Language.PinYin
+        elif in_str in ["WuuShanghai", "2054"]:
+            return Language.WuuShanghai
+        elif in_str in ["Sichuan", "2055"]:
+            return Language.Sichuan
         elif in_str in ["ZhHK", "3076"]:
             return Language.ZhHK
         elif in_str in ["ZhEn", "2052|1033"]:

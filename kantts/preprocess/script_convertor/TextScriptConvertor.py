@@ -8,6 +8,8 @@ from .core.SyllableFormatter import (
     ZhCNSyllableFormatter,
     ZhHKSyllableFormatter,
     PinYinSyllableFormatter,
+    WuuShanghaiSyllableFormatter,
+    SichuanSyllableFormatter,
     EnXXSyllableFormatter,
 )
 from .core.ScriptWord import SpokenWord, SpokenMark, WrittenWord, WrittenMark
@@ -238,12 +240,18 @@ class TextScriptConvertor:
                     ].m_syllable_list.extend(syllable_list)
                     wordIndex += 1
                     pronIndex += 1
-                elif language in [Language.ZhCN, Language.PinYin, Language.ZhHK]:
+                elif language in [
+                    Language.ZhCN,
+                    Language.PinYin,
+                    Language.ZhHK,
+                    Language.WuuShanghai,
+                    Language.Sichuan,
+                ]:
                     charCount = len(
                         spoken_sentence.m_spoken_word_list[wordIndex].m_name
                     )
                     if (
-                        language in [Language.ZhCN, Language.PinYin]
+                        language in [Language.ZhCN, Language.PinYin, Language.Sichuan]
                         and self.IsErHuaYin(pron)
                         and "儿" in spoken_sentence.m_spoken_word_list[wordIndex].m_name
                     ):
@@ -278,7 +286,12 @@ class TextScriptConvertor:
                                     )
                                     return False
                                 if (
-                                    language in [Language.ZhCN, Language.PinYin]
+                                    language
+                                    in [
+                                        Language.ZhCN,
+                                        Language.PinYin,
+                                        Language.Sichuan,
+                                    ]
                                     and self.IsErHuaYin(pron)
                                     and "儿"
                                     in spoken_sentence.m_spoken_word_list[
@@ -403,6 +416,20 @@ class TextScriptConvertor:
                 )
                 return None
             return ZhHKSyllableFormatter(self.m_s2p_map)
+        elif targetLang == Language.WuuShanghai:
+            if len(self.m_s2p_map) == 0:
+                logging.error(
+                    "TextScriptConvertor.InitSyllableFormatter: WuuShanghai syllable to phone map is empty"
+                )
+                return None
+            return WuuShanghaiSyllableFormatter(self.m_s2p_map)
+        elif targetLang == Language.Sichuan:
+            if len(self.m_s2p_map) == 0:
+                logging.error(
+                    "TextScriptConvertor.InitSyllableFormatter: Sichuan syllable to phone map is empty"
+                )
+                return None
+            return SichuanSyllableFormatter(self.m_s2p_map)
         elif targetLang == Language.EnGB:
             formatter = EnXXSyllableFormatter(Language.EnGB)
             if len(self.m_f2p_map) != 0:
