@@ -123,7 +123,7 @@ class AudioProcessor:
             dur_idx = 0
             syll_idx = 0
 
-            while dur_idx < len(dur):
+            while dur_idx < len(dur) and syll_idx < len(symbols):
                 if phones[dur_idx].strip() == "sil":
                     dur_idx += 1
                     continue
