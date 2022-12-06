@@ -36,7 +36,7 @@ def get_fpdict(config):
     a_ling = np.stack(a_lings, axis=1)[:3, :4]
     e_ling = np.stack(e_lings, axis=1)[:3, :4]
 
-    fp_dict = {1: a_ling, 2: en_ling, 3: e_ling}
+    fp_dict = {1: en_ling, 2: a_ling, 3: e_ling}
     return fp_dict
 
 
