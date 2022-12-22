@@ -26,16 +26,46 @@ logging.basicConfig(
 def am_synthesis(symbol_seq, fsnet, ling_unit, device):
     inputs_feat_lst = ling_unit.encode_symbol_sequence(symbol_seq)
 
-    inputs_sy = torch.from_numpy(inputs_feat_lst[0]).long().to(device)
-    inputs_tone = torch.from_numpy(inputs_feat_lst[1]).long().to(device)
-    inputs_syllable = torch.from_numpy(inputs_feat_lst[2]).long().to(device)
-    inputs_ws = torch.from_numpy(inputs_feat_lst[3]).long().to(device)
-    inputs_ling = torch.stack(
-        [inputs_sy, inputs_tone, inputs_syllable, inputs_ws], dim=-1
-    ).unsqueeze(0)
+    inputs_feat_index = 0
+    if ling_unit.using_byte():
+        inputs_byte_index = (
+            torch.from_numpy(inputs_feat_lst[inputs_feat_index]).long().to(device)
+        )
+        inputs_ling = torch.stack([inputs_byte_index], dim=-1).unsqueeze(0)
+    else:
+        inputs_sy = (
+            torch.from_numpy(inputs_feat_lst[inputs_feat_index]).long().to(device)
+        )
+        inputs_feat_index = inputs_feat_index + 1
+        inputs_tone = (
+            torch.from_numpy(inputs_feat_lst[inputs_feat_index]).long().to(device)
+        )
+        inputs_feat_index = inputs_feat_index + 1
+        inputs_syllable = (
+            torch.from_numpy(inputs_feat_lst[inputs_feat_index]).long().to(device)
+        )
+        inputs_feat_index = inputs_feat_index + 1
+        inputs_ws = (
+            torch.from_numpy(inputs_feat_lst[inputs_feat_index]).long().to(device)
+        )
+        inputs_ling = torch.stack(
+            [inputs_sy, inputs_tone, inputs_syllable, inputs_ws], dim=-1
+        ).unsqueeze(0)
 
-    inputs_emo = torch.from_numpy(inputs_feat_lst[4]).long().to(device).unsqueeze(0)
-    inputs_spk = torch.from_numpy(inputs_feat_lst[5]).long().to(device).unsqueeze(0)
+    inputs_feat_index = inputs_feat_index + 1
+    inputs_emo = (
+        torch.from_numpy(inputs_feat_lst[inputs_feat_index])
+        .long()
+        .to(device)
+        .unsqueeze(0)
+    )
+    inputs_feat_index = inputs_feat_index + 1
+    inputs_spk = (
+        torch.from_numpy(inputs_feat_lst[inputs_feat_index])
+        .long()
+        .to(device)
+        .unsqueeze(0)
+    )
 
     inputs_len = (
         torch.zeros(1).to(device).long() + inputs_emo.size(1) - 1

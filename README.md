@@ -21,3 +21,9 @@ pip install -r requirements.txt
 pre-commit install
 ```
 
+## Contact us
+If you have any questions, please feel free to contact us.
+
+Scan the QR code to join our DingTalk group.
+
+<img src="https://raw.githubusercontent.com/wiki/alibaba-damo-academy/KAN-TTS/resources/images/kantts_dinggroup.png" width="200" height="200" />

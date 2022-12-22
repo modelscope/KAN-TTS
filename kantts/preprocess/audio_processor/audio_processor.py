@@ -623,7 +623,6 @@ class AudioProcessor:
                         continue
                     self.energy_dict[wav_basename] = energy
 
-        logging.info("Melspec statistic proceeding...")
         #  Normalize energy
         energy_mean = compute_mean(list(self.energy_dict.values()), dims=1)
         energy_std = compute_std(list(self.energy_dict.values()), energy_mean, dims=1)
