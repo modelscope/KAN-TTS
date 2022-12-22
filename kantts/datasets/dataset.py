@@ -227,9 +227,28 @@ class Voc_Dataset(torch.utils.data.Dataset):
             frame_uv_data = np.load(frame_uv_file).reshape(-1, 1)
             mel_data = np.concatenate((mel_data, frame_f0_data, frame_uv_data), axis=1)
 
-        # make sure the audio length and feature length are matched
-        wav_data = np.pad(wav_data, (0, self.n_fft), mode="reflect")
-        wav_data = wav_data[: len(mel_data) * self.hop_length]
+        # make sure mel_data length greater than batch_max_frames at least 1 frame
+        if mel_data.shape[0] <= self.batch_max_frames:
+            mel_data = np.concatenate(
+                (
+                    mel_data,
+                    np.zeros(
+                        (
+                            self.batch_max_frames - mel_data.shape[0] + 1,
+                            mel_data.shape[1],
+                        )
+                    ),
+                ),
+                axis=0,
+            )
+            wav_cache = np.zeros(mel_data.shape[0] * self.hop_length, dtype=np.float32)
+            wav_cache[: len(wav_data)] = wav_data
+            wav_data = wav_cache
+        else:
+            # make sure the audio length and feature length are matched
+            wav_data = np.pad(wav_data, (0, self.n_fft), mode="reflect")
+            wav_data = wav_data[: len(mel_data) * self.hop_length]
+
         assert len(mel_data) * self.hop_length == len(wav_data)
 
         if self.allow_cache:
