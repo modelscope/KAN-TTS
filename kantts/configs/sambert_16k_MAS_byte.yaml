@@ -1,0 +1,119 @@
+model_type: sambert
+Model:
+#########################################################
+#         SAMBERT NETWORK ARCHITECTURE SETTING          #
+#########################################################
+  KanTtsSAMBERT:
+    params:
+        max_len: 800
+
+        embedding_dim: 512 
+        encoder_num_layers: 8
+        encoder_num_heads: 8
+        encoder_num_units: 128
+        encoder_ffn_inner_dim: 1024
+        encoder_dropout: 0.1
+        encoder_attention_dropout: 0.1
+        encoder_relu_dropout: 0.1
+        encoder_projection_units: 32
+
+        speaker_units: 32
+        emotion_units: 32
+
+        predictor_filter_size: 41
+        predictor_fsmn_num_layers: 3
+        predictor_num_memory_units: 128
+        predictor_ffn_inner_dim: 256
+        predictor_dropout: 0.1
+        predictor_shift: 0
+        predictor_lstm_units: 128
+        dur_pred_prenet_units: [128, 128]
+        dur_pred_lstm_units: 128
+
+        decoder_prenet_units: [256, 256]
+        decoder_num_layers: 12
+        decoder_num_heads: 8
+        decoder_num_units: 128
+        decoder_ffn_inner_dim: 1024
+        decoder_dropout: 0.1
+        decoder_attention_dropout: 0.1
+        decoder_relu_dropout: 0.1
+
+        outputs_per_step: 3
+        num_mels: 80
+
+        postnet_filter_size: 41
+        postnet_fsmn_num_layers: 4
+        postnet_num_memory_units: 256
+        postnet_ffn_inner_dim: 512
+        postnet_dropout: 0.1
+        postnet_shift: 17
+        postnet_lstm_units: 128
+
+        MAS: True
+        using_byte: True
+          
+
+    optimizer:
+      type: Adam
+      params:
+        lr: 0.001
+        betas: [0.9, 0.98]
+        eps: 1.0e-9
+        weight_decay: 0.0
+    scheduler:
+      type: NoamLR
+      params:
+        warmup_steps: 4000
+
+linguistic_unit: 
+  cleaners: english_cleaners
+  lfeat_type_list: byte_index,emo_category,speaker_category
+  speaker_list: F7
+####################################################
+#                   LOSS SETTING                   #
+####################################################
+Loss:
+  MelReconLoss:
+    enable: True
+    params:
+      loss_type: mae
+
+  ProsodyReconLoss:
+    enable: True
+    params:
+      loss_type: mae
+
+  AttentionCTCLoss:
+    enable: True
+
+  AttentionBinarizationLoss:
+    enable: True
+    params:
+      start_epoch: 0
+      warmup_epoch: 100
+
+
+###########################################################
+#                  DATA LOADER SETTING                    #
+###########################################################
+batch_size: 8
+pin_memory: False            
+num_workers: 4 # FIXME: set > 0 may stuck on macos              
+remove_short_samples: False 
+allow_cache: True           
+
+grad_norm: 1.0
+
+###########################################################
+#                    INTERVAL SETTING                     #
+###########################################################
+train_max_steps: 1000000           # Number of training steps.
+save_interval_steps: 20000         # Interval steps to save checkpoint.
+eval_interval_steps: 10000          # Interval steps to evaluate the network.
+log_interval_steps: 1000            # Interval steps to record the training log.
+
+###########################################################
+#                     OTHER SETTING                       #
+###########################################################
+num_save_intermediate_results: 4  # Number of results to be saved as intermediate results.

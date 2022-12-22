@@ -1,5 +1,6 @@
 import os
 import torch
+
 import glob
 import logging
 from multiprocessing import Manager
@@ -13,6 +14,7 @@ from kantts.utils.ling_unit.ling_unit import KanTtsLinguisticUnit, emotion_types
 from scipy.stats import betabinom
 
 DATASET_RANDOM_SEED = 1234
+torch.multiprocessing.set_sharing_strategy("file_system")
 
 
 @functools.lru_cache(maxsize=256)
@@ -221,6 +223,7 @@ class Voc_Dataset(torch.utils.data.Dataset):
 
         if self.nsf_enable:
             frame_f0_data = np.load(frame_f0_file).reshape(-1, 1)
+            # TODO: denorm or destandardize here
             frame_uv_data = np.load(frame_uv_file).reshape(-1, 1)
             mel_data = np.concatenate((mel_data, frame_f0_data, frame_uv_data), axis=1)
 
@@ -557,8 +560,11 @@ class AM_Dataset(torch.utils.data.Dataset):
                 if (
                     not os.path.exists(os.path.join(frame_f0_dir, index + ".npy"))
                     or not os.path.exists(os.path.join(frame_uv_dir, index + ".npy"))
-                    or not os.path.exists(os.path.join(duration_dir, index + ".npy"))
                     or not os.path.exists(os.path.join(mel_dir, index + ".npy"))
+                ):
+                    continue
+                if os.path.exists(duration_dir) and not os.path.exists(
+                    os.path.join(duration_dir, index + ".npy")
                 ):
                     continue
                 f.write(line)
@@ -571,8 +577,11 @@ class AM_Dataset(torch.utils.data.Dataset):
                 if (
                     not os.path.exists(os.path.join(frame_f0_dir, index + ".npy"))
                     or not os.path.exists(os.path.join(frame_uv_dir, index + ".npy"))
-                    or not os.path.exists(os.path.join(duration_dir, index + ".npy"))
                     or not os.path.exists(os.path.join(mel_dir, index + ".npy"))
+                ):
+                    continue
+                if os.path.exists(duration_dir) and not os.path.exists(
+                    os.path.join(duration_dir, index + ".npy")
                 ):
                     continue
                 f.write(line)
@@ -582,51 +591,74 @@ class AM_Dataset(torch.utils.data.Dataset):
         data_dict = {}
 
         max_input_length = max((len(x[0][0]) for x in batch))
-        max_dur_length = max((x[2].shape[0] for x in batch)) + 1
+        if self.with_duration:
+            max_dur_length = max((x[2].shape[0] for x in batch)) + 1
 
-        # pure linguistic info: sy|tone|syllable_flag|word_segment
-        lfeat_type = self.ling_unit._lfeat_type_list[0]
-        inputs_sy = self.padder._prepare_scalar_inputs(
-            [x[0][0] for x in batch],
-            max_input_length,
-            self.ling_unit._sub_unit_pad[lfeat_type],
-        ).long()
-        # tone
-        lfeat_type = self.ling_unit._lfeat_type_list[1]
-        inputs_tone = self.padder._prepare_scalar_inputs(
-            [x[0][1] for x in batch],
-            max_input_length,
-            self.ling_unit._sub_unit_pad[lfeat_type],
-        ).long()
+        lfeat_type_index = 0
+        lfeat_type = self.ling_unit._lfeat_type_list[lfeat_type_index]
+        if self.ling_unit.using_byte():
+            # for byte-based model only
+            inputs_byte_index = self.padder._prepare_scalar_inputs(
+                [x[0][lfeat_type_index] for x in batch],
+                max_input_length,
+                self.ling_unit._sub_unit_pad[lfeat_type],
+            ).long()
 
-        # syllable_flag
-        lfeat_type = self.ling_unit._lfeat_type_list[2]
-        inputs_syllable_flag = self.padder._prepare_scalar_inputs(
-            [x[0][2] for x in batch],
-            max_input_length,
-            self.ling_unit._sub_unit_pad[lfeat_type],
-        ).long()
+            data_dict["input_lings"] = torch.stack([inputs_byte_index], dim=2)
+        else:
+            # pure linguistic info: sy|tone|syllable_flag|word_segment
+            # sy
+            inputs_sy = self.padder._prepare_scalar_inputs(
+                [x[0][lfeat_type_index] for x in batch],
+                max_input_length,
+                self.ling_unit._sub_unit_pad[lfeat_type],
+            ).long()
 
-        # word_segment
-        lfeat_type = self.ling_unit._lfeat_type_list[3]
-        inputs_ws = self.padder._prepare_scalar_inputs(
-            [x[0][3] for x in batch],
-            max_input_length,
-            self.ling_unit._sub_unit_pad[lfeat_type],
-        ).long()
+            # tone
+            lfeat_type_index = lfeat_type_index + 1
+            lfeat_type = self.ling_unit._lfeat_type_list[lfeat_type_index]
+            inputs_tone = self.padder._prepare_scalar_inputs(
+                [x[0][lfeat_type_index] for x in batch],
+                max_input_length,
+                self.ling_unit._sub_unit_pad[lfeat_type],
+            ).long()
+
+            # syllable_flag
+            lfeat_type_index = lfeat_type_index + 1
+            lfeat_type = self.ling_unit._lfeat_type_list[lfeat_type_index]
+            inputs_syllable_flag = self.padder._prepare_scalar_inputs(
+                [x[0][lfeat_type_index] for x in batch],
+                max_input_length,
+                self.ling_unit._sub_unit_pad[lfeat_type],
+            ).long()
+
+            # word_segment
+            lfeat_type_index = lfeat_type_index + 1
+            lfeat_type = self.ling_unit._lfeat_type_list[lfeat_type_index]
+            inputs_ws = self.padder._prepare_scalar_inputs(
+                [x[0][lfeat_type_index] for x in batch],
+                max_input_length,
+                self.ling_unit._sub_unit_pad[lfeat_type],
+            ).long()
+
+            data_dict["input_lings"] = torch.stack(
+                [inputs_sy, inputs_tone, inputs_syllable_flag, inputs_ws], dim=2
+            )
 
         # emotion category
-        lfeat_type = self.ling_unit._lfeat_type_list[4]
+        lfeat_type_index = lfeat_type_index + 1
+        lfeat_type = self.ling_unit._lfeat_type_list[lfeat_type_index]
         data_dict["input_emotions"] = self.padder._prepare_scalar_inputs(
-            [x[0][4] for x in batch],
+            [x[0][lfeat_type_index] for x in batch],
             max_input_length,
             self.ling_unit._sub_unit_pad[lfeat_type],
         ).long()
 
         # speaker category
-        lfeat_type = self.ling_unit._lfeat_type_list[5]
+        lfeat_type_index = lfeat_type_index + 1
+        lfeat_type = self.ling_unit._lfeat_type_list[lfeat_type_index]
         data_dict["input_speakers"] = self.padder._prepare_scalar_inputs(
-            [x[0][5] for x in batch],
+            [x[0][lfeat_type_index] for x in batch],
             max_input_length,
             self.ling_unit._sub_unit_pad[lfeat_type],
         ).long()
@@ -639,9 +671,6 @@ class AM_Dataset(torch.utils.data.Dataset):
                 0,
             ).long()
 
-        data_dict["input_lings"] = torch.stack(
-            [inputs_sy, inputs_tone, inputs_syllable_flag, inputs_ws], dim=2
-        )
         data_dict["valid_input_lengths"] = torch.as_tensor(
             [len(x[0][0]) - 1 for x in batch], dtype=torch.long
         )  # 输入的symbol sequence会在后面拼一个“~”，影响duration计算，所以把length-1

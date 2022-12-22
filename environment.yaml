@@ -66,5 +66,6 @@ dependencies:
     - toml==0.10.2
     - traitlets==5.3.0
     - wcwidth==0.2.5
+    - bitstring==3.1.6
     - --find-links https://modelscope.oss-cn-beijing.aliyuncs.com/releases/repo.html
     - ttsfrd

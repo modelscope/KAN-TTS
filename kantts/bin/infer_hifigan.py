@@ -54,6 +54,15 @@ def load_model(ckpt, config=None):
     return model
 
 
+def binarize(mel, threshold=0.6):
+    # vuv binarize
+    res_mel = mel.copy()
+    index = np.where(mel[:, -1] < threshold)[0]
+    res_mel[:, -1] = 1.0
+    res_mel[:, -1][index] = 0.0
+    return res_mel
+
+
 def hifigan_infer(input_mel, ckpt_path, output_dir, config=None):
     if not torch.cuda.is_available():
         device = torch.device("cpu")
@@ -101,6 +110,8 @@ def hifigan_infer(input_mel, ckpt_path, output_dir, config=None):
         for mel in mel_lst:
             utt_id = os.path.splitext(os.path.basename(mel))[0]
             mel_data = np.load(mel)
+            if model.nsf_enable:
+                mel_data = binarize(mel_data)
             # generate
             mel_data = torch.tensor(mel_data, dtype=torch.float).to(device)
             # (T, C) -> (B, C, T)
