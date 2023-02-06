@@ -170,7 +170,7 @@ def train(
     )
 
     if resume_path is not None:
-        trainer.load_checkpoint(resume_path, True, True)
+        trainer.load_checkpoint(resume_path, True, False)
         logging.info(f"Successfully resumed from {resume_path}.")
 
     if resume_bert_path is not None:
