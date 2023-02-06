@@ -156,15 +156,15 @@ class Generator(torch.nn.Module):
             #  FIXME: sin function here seems to be causing issues
             x = torch.sin(x) + x
             rep = self.repeat_upsamples[i](x)
+            # transconv
+            up = self.transpose_upsamples[i](x)
 
             if self.nsf_enable:
                 # Downsampling the excitation signal
                 e = self.source_downs[i](excitation)
                 # augment inputs with the excitation
-                x = rep + e
+                x = rep + e + up[:, :, : rep.shape[-1]]
             else:
-                # transconv
-                up = self.transpose_upsamples[i](x)
                 x = rep + up[:, :, : rep.shape[-1]]
 
             xs = None
