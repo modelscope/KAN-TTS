@@ -64,8 +64,6 @@ class Generator(torch.nn.Module):
         )
 
         for i in range(len(upsample_kernal_sizes)):
-            if causal:
-                assert upsample_kernal_sizes[i] == 2 * upsample_scales[i]
             self.transpose_upsamples.append(
                 torch.nn.Sequential(
                     getattr(torch.nn, nonlinear_activation)(
