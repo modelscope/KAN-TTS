@@ -23,6 +23,38 @@ logging.basicConfig(
 )
 
 
+def denorm_f0(mel, f0_threshold=30, uv_threshold=0.6, norm_type='mean_std', f0_feature=None):
+    if norm_type == 'mean_std':
+        f0_mvn = f0_feature
+
+        f0 = mel[:, -2]
+        uv = mel[:, -1]
+
+        uv[uv < uv_threshold] = 0.0
+        uv[uv >= uv_threshold] = 1.0
+
+        f0 = f0 * f0_mvn[1:, :] + f0_mvn[0:1, :]
+        f0[f0 < f0_threshold] = f0_threshold
+
+        mel[:, -2] = f0
+        mel[:, -1] = uv
+    else: # global
+        f0_global_max_min = f0_feature
+
+        f0 = mel[:, -2]
+        uv = mel[:, -1]
+
+        uv[uv < uv_threshold] = 0.0
+        uv[uv >= uv_threshold] = 1.0
+
+        f0 = f0 * (f0_global_max_min[0] - f0_global_max_min[1]) + f0_global_max_min[1]
+        f0[f0 < f0_threshold] = f0_threshold
+
+        mel[:, -2] = f0
+        mel[:, -1] = uv
+
+    return mel
+
 def am_synthesis(symbol_seq, fsnet, ling_unit, device):
     inputs_feat_lst = ling_unit.encode_symbol_sequence(symbol_seq)
 
@@ -130,6 +162,20 @@ def am_infer(sentence, ckpt, output_dir, config=None):
     ling_unit_size = ling_unit.get_unit_size()
     config["Model"]["KanTtsSAMBERT"]["params"].update(ling_unit_size)
 
+    # nsf
+    nsf_enable = config["Model"]["KanTtsSAMBERT"]["params"].get("NSF", False) 
+    if nsf_enable:
+        nsf_norm_type = config["Model"]["KanTtsSAMBERT"]["params"].get("nsf_norm_type", "mean_std")
+        if nsf_norm_type == "mean_std":
+            f0_mvn_file = os.path.join(
+                os.path.dirname(os.path.dirname(ckpt)), "mvn.npy"
+            )
+            f0_feature = np.load(f0_mvn_file)   
+        else: # global
+            nsf_f0_global_minimum = config["Model"]["KanTtsSAMBERT"]["params"].get("nsf_f0_global_minimum", 30.0) 
+            nsf_f0_global_maximum = config["Model"]["KanTtsSAMBERT"]["params"].get("nsf_f0_global_maximum", 730.0) 
+            f0_feature = [nsf_f0_global_maximum, nsf_f0_global_minimum]
+
     model, _, _ = model_builder(config, device)
 
     fsnet = model["KanTtsSAMBERT"]
@@ -156,6 +202,9 @@ def am_infer(sentence, ckpt, output_dir, config=None):
                 mel, mel_post, dur, f0, energy = am_synthesis(
                     line[1], fsnet, ling_unit, device
                 )
+
+            if nsf_enable:
+                mel_post = denorm_f0(mel_post, norm_type=nsf_norm_type, f0_feature=f0_feature) 
 
             np.save(mel_path, mel_post)
             np.savetxt(dur_path, dur)
