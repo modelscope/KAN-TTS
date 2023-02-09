@@ -71,7 +71,13 @@ def concat_process(chunked_dir, output_dir):
 
 
 def text_to_wav(
-    text_file, output_dir, resources_zip_file, am_ckpt, voc_ckpt, speaker=None
+    text_file,
+    output_dir,
+    resources_zip_file,
+    am_ckpt,
+    voc_ckpt,
+    speaker=None,
+    lang="PinYin",
 ):
     os.makedirs(output_dir, exist_ok=True)
     os.makedirs(os.path.join(output_dir, "res_wavs"), exist_ok=True)
@@ -93,7 +99,7 @@ def text_to_wav(
         config = yaml.load(f, Loader=yaml.Loader)
     if speaker is None:
         speaker = config["linguistic_unit"]["speaker_list"].split(",")[0]
-    symbols_lst = text_to_symbols(texts, resource_dir, speaker)
+    symbols_lst = text_to_symbols(texts, resource_dir, speaker, lang)
     symbols_file = os.path.join(output_dir, "symbols.lst")
     with open(symbols_file, "w") as symbol_data:
         for symbol in symbols_lst:
@@ -132,6 +138,24 @@ if __name__ == "__main__":
         default=None,
         help="The speaker name, default is the first speaker",
     )
+    parser.add_argument(
+        "--lang",
+        type=str,
+        default="PinYin",
+        help="""The language of the text, default is PinYin, other options are:
+        English,
+        British,
+        ZhHK,
+        WuuShanghai,
+        Sichuan,
+        Indonesian,
+        Malay,
+        Filipino,
+        Vietnamese,
+        Korean,
+        Russian
+        """,
+    )
     args = parser.parse_args()
     text_to_wav(
         args.txt,
@@ -140,4 +164,5 @@ if __name__ == "__main__":
         args.am_ckpt,
         args.voc_ckpt,
         args.speaker,
+        args.lang,
     )
