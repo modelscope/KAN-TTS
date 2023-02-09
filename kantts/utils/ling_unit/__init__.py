@@ -1,10 +1,26 @@
 import ttsfrd
 
-#  TODO: default Zh-CN
-def text_to_mit_symbols(texts, resources_dir, speaker):
+ENG_LANG_MAPPING = {
+    "PinYin": "zh-cn",
+    "English": "en-us",
+    "British": "en-gb",
+    "ZhHK": "hk_cantonese",
+    "Sichuan": "sichuan",
+    "Japanese": "japanese",
+    "WuuShangHai": "shanghai",
+    "Indonesian": "indonesian",
+    "Malay": "malay",
+    "Filipino": "filipino",
+    "Vietnamese": "vietnamese",
+    "Korean": "korean",
+    "Russian": "russian",
+}
+
+
+def text_to_mit_symbols(texts, resources_dir, speaker, lang="PinYin"):
     fe = ttsfrd.TtsFrontendEngine()
     fe.initialize(resources_dir)
-    fe.set_lang_type("Zh-CN")
+    fe.set_lang_type(ENG_LANG_MAPPING[lang])
 
     symbols_lst = []
     for idx, text in enumerate(texts):
