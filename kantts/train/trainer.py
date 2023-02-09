@@ -1034,9 +1034,12 @@ class Sambert_Trainer(Trainer):
             )
 
         if restore_training_state:
-            self.optimizer["KanTtsSAMBERT"].load_state_dict(state_dict["optimizer"])
-            self.scheduler["KanTtsSAMBERT"].load_state_dict(state_dict["scheduler"])
-            self.steps = state_dict["steps"]
+            if "optimizer" in state_dict:
+                self.optimizer["KanTtsSAMBERT"].load_state_dict(state_dict["optimizer"])
+            if "scheduler" in state_dict:
+                self.scheduler["KanTtsSAMBERT"].load_state_dict(state_dict["scheduler"])
+            if "steps" in state_dict:
+                self.steps = state_dict["steps"]
 
 
 class Textsy_BERT_Trainer(Trainer):
