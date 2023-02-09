@@ -153,9 +153,12 @@ class Trainer(object):
         state_dict = torch.load(checkpoint_path)
         self.model.load_state_dict(state_dict["model"], strict=strict)
         if restore_training_state:
-            self.optimizer.load_state_dict(state_dict["optimizer"])
-            self.scheduler.load_state_dict(state_dict["scheduler"])
-            self.steps = state_dict["steps"]
+            if "optimizer" in state_dict:
+                self.optimizer["KanTtsSAMBERT"].load_state_dict(state_dict["optimizer"])
+            if "scheduler" in state_dict:
+                self.scheduler["KanTtsSAMBERT"].load_state_dict(state_dict["scheduler"])
+            if "steps" in state_dict:
+                self.steps = state_dict["steps"]
 
     #  TODO
     def check_save_interval(self):
@@ -651,20 +654,23 @@ class GAN_Trainer(Trainer):
                 )
 
         if restore_training_state:
-            self.steps = state_dict["steps"]
-            self.optimizer["generator"].load_state_dict(
-                state_dict["optimizer"]["generator"]
-            )
-            self.scheduler["generator"].load_state_dict(
-                state_dict["scheduler"]["generator"]
-            )
-            for model_name in state_dict["optimizer"]["discriminator"].keys():
-                self.optimizer["discriminator"][model_name].load_state_dict(
-                    state_dict["optimizer"]["discriminator"][model_name]
+            if "steps" in state_dict:
+                self.steps = state_dict["steps"]
+            if "optimizer" in state_dict:
+                self.optimizer["generator"].load_state_dict(
+                    state_dict["optimizer"]["generator"]
                 )
-            for model_name in state_dict["scheduler"]["discriminator"].keys():
-                self.scheduler["discriminator"][model_name].load_state_dict(
-                    state_dict["scheduler"]["discriminator"][model_name]
+                for model_name in state_dict["optimizer"]["discriminator"].keys():
+                    self.optimizer["discriminator"][model_name].load_state_dict(
+                        state_dict["optimizer"]["discriminator"][model_name]
+                )
+            if "scheduler" in state_dict:
+                for model_name in state_dict["scheduler"]["discriminator"].keys():
+                    self.scheduler["discriminator"][model_name].load_state_dict(
+                        state_dict["scheduler"]["discriminator"][model_name]
+                    )
+                self.scheduler["generator"].load_state_dict(
+                    state_dict["scheduler"]["generator"]
                 )
 
 
@@ -1028,9 +1034,12 @@ class Sambert_Trainer(Trainer):
             )
 
         if restore_training_state:
-            self.optimizer["KanTtsSAMBERT"].load_state_dict(state_dict["optimizer"])
-            self.scheduler["KanTtsSAMBERT"].load_state_dict(state_dict["scheduler"])
-            self.steps = state_dict["steps"]
+            if "optimizer" in state_dict:
+                self.optimizer["KanTtsSAMBERT"].load_state_dict(state_dict["optimizer"])
+            if "scheduler" in state_dict:
+                self.scheduler["KanTtsSAMBERT"].load_state_dict(state_dict["scheduler"])
+            if "steps" in state_dict:
+                self.steps = state_dict["steps"]
 
 
 class Textsy_BERT_Trainer(Trainer):

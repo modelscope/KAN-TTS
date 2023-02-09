@@ -109,6 +109,11 @@ class Voc_Dataset(torch.utils.data.Dataset):
         self.nsf_enable = (
             config["Model"]["Generator"]["params"].get("nsf_params", None) is not None
         )
+        if self.nsf_enable:
+            self.nsf_norm_type = config["Model"]["Generator"]["params"]["nsf_params"].get("nsf_norm_type", '"mean_std') 
+            if self.nsf_norm_type == "global":
+                self.nsf_f0_global_minimum = config["Model"]["Generator"]["params"]["nsf_params"].get("nsf_f0_global_minimum", 30.0) 
+                self.nsf_f0_global_maximum = config["Model"]["Generator"]["params"]["nsf_params"].get("nsf_f0_global_maximum", 730.0) 
 
         if not isinstance(metafile, list):
             metafile = [metafile]
@@ -217,13 +222,23 @@ class Voc_Dataset(torch.utils.data.Dataset):
             return self.caches[idx]
 
         wav_file, mel_file, frame_f0_file, frame_uv_file = self.meta[idx]
+        f0_mean_file = os.path.join(os.path.dirname(os.path.dirname(frame_f0_file)), 'f0', 'f0_mean.txt')
+        f0_std_file = os.path.join(os.path.dirname(os.path.dirname(frame_f0_file)), 'f0', 'f0_std.txt')   
 
         wav_data = librosa.core.load(wav_file, sr=self.sampling_rate)[0]
         mel_data = np.load(mel_file)
 
         if self.nsf_enable:
             frame_f0_data = np.load(frame_f0_file).reshape(-1, 1)
-            # TODO: denorm or destandardize here
+            # denorm f0
+            ## default frame_f0_data using mean_std norm
+            if self.nsf_norm_type in ["mean_std", "global"]:
+                if self.nsf_norm_type == "mean_std":
+                    f0_mean = np.loadtxt(f0_mean_file)
+                    f0_std = np.loadtxt(f0_std_file) 
+                    frame_f0_data = frame_f0_data * f0_std + f0_mean
+                else:
+                    frame_f0_data = frame_f0_data * (self.nsf_f0_global_maximum - self.nsf_f0_global_minimum) + self.nsf_f0_global_minimum
             frame_uv_data = np.load(frame_uv_file).reshape(-1, 1)
             mel_data = np.concatenate((mel_data, frame_f0_data, frame_uv_data), axis=1)
 
@@ -386,6 +401,11 @@ class AM_Dataset(torch.utils.data.Dataset):
         self.nsf_enable = self.config["Model"]["KanTtsSAMBERT"]["params"].get(
             "NSF", False
         )
+        if self.nsf_enable:
+            self.nsf_norm_type = config["Model"]["KanTtsSAMBERT"]["params"].get("nsf_norm_type", "mean_std") 
+            if self.nsf_norm_type == "global":
+                self.nsf_f0_global_minimum = config["Model"]["KanTtsSAMBERT"]["params"].get("nsf_f0_global_minimum", 30.0) 
+                self.nsf_f0_global_maximum = config["Model"]["KanTtsSAMBERT"]["params"].get("nsf_f0_global_maximum", 730.0) 
         self.fp_enable = self.config["Model"]["KanTtsSAMBERT"]["params"].get(
             "FP", False
         )
@@ -436,6 +456,8 @@ class AM_Dataset(torch.utils.data.Dataset):
             frame_uv_file,
             aug_ling_txt,
         ) = self.meta[idx]
+        f0_mean_file = os.path.join(os.path.dirname(os.path.dirname(frame_f0_file)), 'f0', 'f0_mean.txt')
+        f0_std_file = os.path.join(os.path.dirname(os.path.dirname(frame_f0_file)), 'f0', 'f0_std.txt')   
 
         ling_data = self.ling_unit.encode_symbol_sequence(ling_txt)
         mel_data = np.load(mel_file)
@@ -459,6 +481,12 @@ class AM_Dataset(torch.utils.data.Dataset):
         # Concat frame-level f0 and uv to mel_data
         if self.nsf_enable:
             frame_f0_data = np.load(frame_f0_file).reshape(-1, 1)
+            ## default f0 data is mean std normed; re-norm here
+            if self.nsf_norm_type == "global":
+                f0_mean = np.loadtxt(f0_mean_file)
+                f0_std = np.loadtxt(f0_std_file) 
+                f0_origin = frame_f0_data * f0_std + f0_mean
+                frame_f0_data = (f0_origin - self.nsf_f0_global_minimum) / (self.nsf_f0_global_maximum - self.nsf_f0_global_minimum) 
             frame_uv_data = np.load(frame_uv_file).reshape(-1, 1)
             mel_data = np.concatenate([mel_data, frame_f0_data, frame_uv_data], axis=1)
 
