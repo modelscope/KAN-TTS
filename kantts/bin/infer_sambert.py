@@ -215,7 +215,7 @@ def am_infer(sentence, ckpt, output_dir, se_file=None, config=None):
 
             with torch.no_grad():
                 mel, mel_post, dur, f0, energy = am_synthesis(
-                    line[1], fsnet, ling_unit, device
+                    line[1], fsnet, ling_unit, device, se=se
                 )
 
             if nsf_enable:
