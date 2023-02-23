@@ -714,7 +714,9 @@ class KanTtsSAMBERT(nn.Module):
         super(KanTtsSAMBERT, self).__init__()
 
         self.text_encoder = TextFftEncoder(config)
-        self.spk_tokenizer = nn.Embedding(config["speaker"], config["speaker_units"])
+        self.se_enable = config.get("SE", False)
+        if not self.se_enable:
+            self.spk_tokenizer = nn.Embedding(config["speaker"], config["speaker_units"])
         self.emo_tokenizer = nn.Embedding(config["emotion"], config["emotion_units"])
         self.variance_adaptor = VarianceAdaptor(config)
         self.mel_decoder = MelPNCADecoder(config)
@@ -923,7 +925,7 @@ class KanTtsSAMBERT(nn.Module):
                 duration_targets[i, input_lengths[i]] = padding
 
         emo_hid = self.emo_tokenizer(inputs_emotion)
-        spk_hid = self.spk_tokenizer(inputs_speaker)
+        spk_hid = inputs_speaker if self.se_enable else self.spk_tokenizer(inputs_speaker)
 
         inter_masks = get_mask_from_lengths(inter_lengths, max_len=text_hid.size(1))
 

@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.dirname(ROOT_PATH))  # NOQA: E402
 
 try:
     from kantts.preprocess.audio_processor.audio_processor import AudioProcessor
+    from kantts.preprocess.se_processor.se_processor import SpeakerEmbeddingProcessor
     from kantts.preprocess.script_convertor.TextScriptConvertor import (
         TextScriptConvertor,
     )
@@ -99,6 +100,7 @@ def process_data(
     speaker_name=None,
     targetLang="PinYin",
     skip_script=False,
+    se_model=None,
 ):
     foreignLang = "EnUS"
     #  TODO: check if the vocie is supported
@@ -129,6 +131,8 @@ def process_data(
 
     config["create_time"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
     config["git_revision_hash"] = get_git_revision_hash()
+
+    se_enable = config["audio_config"].get("se_feature", False)
 
     with open(os.path.join(voice_output_dir, "audio_config.yaml"), "w") as f:
         yaml.dump(config, f, Dumper=yaml.Dumper, default_flow_style=None)
@@ -185,6 +189,16 @@ def process_data(
         voice_output_dir,
         raw_metafile,
     )
+    logging.info("Processing audio done.")
+
+    #  SpeakerEmbedding processor
+    if se_enable:
+        sep = SpeakerEmbeddingProcessor()
+        sep.process(
+            voice_output_dir,
+            se_model,
+        )
+    logging.info("Processing speaker embedding done.")
 
     logging.info("Processing done.")
 
@@ -200,6 +214,7 @@ if __name__ == "__main__":
     parser.add_argument("--audio_config", type=str, required=True)
     parser.add_argument("--speaker", type=str, default=None, help="speaker")
     parser.add_argument("--lang", type=str, default="PinYin", help="target language")
+    parser.add_argument("--se_model", type=str, default="../pre_data/speaker_embeddding/se.onnx", help="speaker embedding extractor model")
     parser.add_argument(
         "--skip_script", action="store_true", help="skip script converting"
     )
@@ -216,6 +231,7 @@ if __name__ == "__main__":
             args.speaker,
             args.lang,
             args.skip_script,
+            args.se_model,
         )
     except (Exception, KeyboardInterrupt) as e:
         logging.error(e, exc_info=True)
