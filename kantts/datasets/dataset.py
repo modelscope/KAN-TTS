@@ -229,16 +229,11 @@ class Voc_Dataset(torch.utils.data.Dataset):
         mel_data = np.load(mel_file)
 
         if self.nsf_enable:
+            # denorm f0; default frame_f0_data using mean_std norm
             frame_f0_data = np.load(frame_f0_file).reshape(-1, 1)
-            # denorm f0
-            ## default frame_f0_data using mean_std norm
-            if self.nsf_norm_type in ["mean_std", "global"]:
-                if self.nsf_norm_type == "mean_std":
-                    f0_mean = np.loadtxt(f0_mean_file)
-                    f0_std = np.loadtxt(f0_std_file) 
-                    frame_f0_data = frame_f0_data * f0_std + f0_mean
-                else:
-                    frame_f0_data = frame_f0_data * (self.nsf_f0_global_maximum - self.nsf_f0_global_minimum) + self.nsf_f0_global_minimum
+            f0_mean = np.loadtxt(f0_mean_file)
+            f0_std = np.loadtxt(f0_std_file) 
+            frame_f0_data = frame_f0_data * f0_std + f0_mean
             frame_uv_data = np.load(frame_uv_file).reshape(-1, 1)
             mel_data = np.concatenate((mel_data, frame_f0_data, frame_uv_data), axis=1)
 
@@ -406,6 +401,9 @@ class AM_Dataset(torch.utils.data.Dataset):
             if self.nsf_norm_type == "global":
                 self.nsf_f0_global_minimum = config["Model"]["KanTtsSAMBERT"]["params"].get("nsf_f0_global_minimum", 30.0) 
                 self.nsf_f0_global_maximum = config["Model"]["KanTtsSAMBERT"]["params"].get("nsf_f0_global_maximum", 730.0) 
+        self.se_enable = self.config["Model"]["KanTtsSAMBERT"]["params"].get(
+            "SE", False
+        )
         self.fp_enable = self.config["Model"]["KanTtsSAMBERT"]["params"].get(
             "FP", False
         )
@@ -455,6 +453,7 @@ class AM_Dataset(torch.utils.data.Dataset):
             frame_f0_file,
             frame_uv_file,
             aug_ling_txt,
+            se_path,
         ) = self.meta[idx]
         f0_mean_file = os.path.join(os.path.dirname(os.path.dirname(frame_f0_file)), 'f0', 'f0_mean.txt')
         f0_std_file = os.path.join(os.path.dirname(os.path.dirname(frame_f0_file)), 'f0', 'f0_std.txt')   
@@ -464,6 +463,7 @@ class AM_Dataset(torch.utils.data.Dataset):
         dur_data = np.load(dur_file) if dur_file is not None else None
         f0_data = np.load(f0_file)
         energy_data = np.load(energy_file)
+        se_data = np.load(se_path) if self.se_enable else None
 
         # generate fp position label according to fpadd_meta
         if self.fp_enable and aug_ling_txt is not None:
@@ -480,12 +480,15 @@ class AM_Dataset(torch.utils.data.Dataset):
 
         # Concat frame-level f0 and uv to mel_data
         if self.nsf_enable:
+            # origin f0 data is mean std normed
             frame_f0_data = np.load(frame_f0_file).reshape(-1, 1)
             ## default f0 data is mean std normed; re-norm here
             if self.nsf_norm_type == "global":
+                # denorm f0
                 f0_mean = np.loadtxt(f0_mean_file)
                 f0_std = np.loadtxt(f0_std_file) 
                 f0_origin = frame_f0_data * f0_std + f0_mean
+                # renorm f0
                 frame_f0_data = (f0_origin - self.nsf_f0_global_minimum) / (self.nsf_f0_global_maximum - self.nsf_f0_global_minimum) 
             frame_uv_data = np.load(frame_uv_file).reshape(-1, 1)
             mel_data = np.concatenate([mel_data, frame_f0_data, frame_uv_data], axis=1)
@@ -499,6 +502,7 @@ class AM_Dataset(torch.utils.data.Dataset):
                 energy_data,
                 attn_prior,
                 fp_label,
+                se_data,
             )
 
         return (
@@ -509,6 +513,7 @@ class AM_Dataset(torch.utils.data.Dataset):
             energy_data,
             attn_prior,
             fp_label,
+            se_data,
         )
 
     def load_meta(self, metafile, data_dir):
@@ -530,6 +535,7 @@ class AM_Dataset(torch.utils.data.Dataset):
         energy_dir = os.path.join(data_dir, "energy")
         frame_f0_dir = os.path.join(data_dir, "frame_f0")
         frame_uv_dir = os.path.join(data_dir, "frame_uv")
+        se_dir = os.path.join(data_dir, "se")
 
         self.with_duration = os.path.exists(dur_dir)
 
@@ -551,6 +557,11 @@ class AM_Dataset(torch.utils.data.Dataset):
             if self.fp_enable and aug_ling_txt is None:
                 logging.warning(f"Missing fpadd meta for {index}")
                 continue
+            se_path =  os.path.join(se_dir, "se.npy")
+            if self.se_enable:
+                if not os.path.exists(se_path):
+                    logging.warning(f"Missing se meta")
+                    continue
 
             items.append(
                 (
@@ -562,6 +573,7 @@ class AM_Dataset(torch.utils.data.Dataset):
                     frame_f0_file,
                     frame_uv_file,
                     aug_ling_txt,
+                    se_path,
                 )
             )
 
@@ -589,9 +601,11 @@ class AM_Dataset(torch.utils.data.Dataset):
         valid_meta_file,
         badlist=None,
         split_ratio=0.98,
+        se_enable=False,
     ):
         with open(raw_meta_file, "r") as f:
             lines = f.readlines()
+        se_dir = os.path.join(out_dir, "se")
         frame_f0_dir = os.path.join(out_dir, "frame_f0")
         frame_uv_dir = os.path.join(out_dir, "frame_uv")
         mel_dir = os.path.join(out_dir, "mel")
@@ -614,6 +628,11 @@ class AM_Dataset(torch.utils.data.Dataset):
                     os.path.join(duration_dir, index + ".npy")
                 ):
                     continue
+                if se_enable:
+                    if os.path.exists(se_dir) and not os.path.exists(
+                        os.path.join(se_dir, "se.npy")
+                    ):
+                        continue
                 f.write(line)
 
         with open(valid_meta_file, "w") as f:
@@ -631,6 +650,11 @@ class AM_Dataset(torch.utils.data.Dataset):
                     os.path.join(duration_dir, index + ".npy")
                 ):
                     continue
+                if se_enable:
+                    if os.path.exists(se_dir) and not os.path.exists(
+                        os.path.join(se_dir, "se.npy")
+                    ):
+                        continue
                 f.write(line)
 
     #  TODO: implement collate_fn
@@ -704,11 +728,16 @@ class AM_Dataset(torch.utils.data.Dataset):
         # speaker category
         lfeat_type_index = lfeat_type_index + 1
         lfeat_type = self.ling_unit._lfeat_type_list[lfeat_type_index]
-        data_dict["input_speakers"] = self.padder._prepare_scalar_inputs(
-            [x[0][lfeat_type_index] for x in batch],
-            max_input_length,
-            self.ling_unit._sub_unit_pad[lfeat_type],
-        ).long()
+        if self.se_enable:
+            data_dict["input_speakers"] = self.padder._prepare_targets(
+                [x[7].repeat(len(x[0][0]), axis=0) for x in batch], max_input_length, 0.0
+            )
+        else:
+            data_dict["input_speakers"] = self.padder._prepare_scalar_inputs(
+                [x[0][lfeat_type_index] for x in batch],
+                max_input_length,
+                self.ling_unit._sub_unit_pad[lfeat_type],
+            ).long()
 
         # fp label category
         if self.fp_enable:
@@ -774,6 +803,7 @@ def get_am_datasets(
     config,
     allow_cache,
     split_ratio=0.98,
+    se_enable=False,
 ):
     if not isinstance(root_dir, list):
         root_dir = [root_dir]
@@ -797,7 +827,7 @@ def get_am_datasets(
         valid_meta = os.path.join(data_dir, am_valid_fn)
         if not os.path.exists(train_meta) or not os.path.exists(valid_meta):
             AM_Dataset.gen_metafile(
-                raw_metafile, data_dir, train_meta, valid_meta, split_ratio
+                raw_metafile, data_dir, train_meta, valid_meta, split_ratio, se_enable
             )
         train_meta_lst.append(train_meta)
         valid_meta_lst.append(valid_meta)

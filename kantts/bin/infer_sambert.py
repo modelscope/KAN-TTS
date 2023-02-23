@@ -55,7 +55,7 @@ def denorm_f0(mel, f0_threshold=30, uv_threshold=0.6, norm_type='mean_std', f0_f
 
     return mel
 
-def am_synthesis(symbol_seq, fsnet, ling_unit, device):
+def am_synthesis(symbol_seq, fsnet, ling_unit, device, se=None):
     inputs_feat_lst = ling_unit.encode_symbol_sequence(symbol_seq)
 
     inputs_feat_index = 0
@@ -91,24 +91,36 @@ def am_synthesis(symbol_seq, fsnet, ling_unit, device):
         .to(device)
         .unsqueeze(0)
     )
+
     inputs_feat_index = inputs_feat_index + 1
-    inputs_spk = (
-        torch.from_numpy(inputs_feat_lst[inputs_feat_index])
-        .long()
-        .to(device)
-        .unsqueeze(0)
-    )
+    se_enable = False if se is None else True
+    if se_enable:
+        inputs_spk = (
+            torch.from_numpy(se.repeat(len(inputs_feat_lst[inputs_feat_index]), axis=0))
+            .float()
+            .to(device)
+            .unsqueeze(0)[:, :-1, :]
+        )
+    else:
+        inputs_spk = (
+            torch.from_numpy(inputs_feat_lst[inputs_feat_index])
+            .long()
+            .to(device)
+            .unsqueeze(0)[:, :-1]
+        )
 
     inputs_len = (
         torch.zeros(1).to(device).long() + inputs_emo.size(1) - 1
     )  # minus 1 for "~"
 
+
     res = fsnet(
         inputs_ling[:, :-1, :],
         inputs_emo[:, :-1],
-        inputs_spk[:, :-1],
+        inputs_spk,
         inputs_len,
     )
+
     x_band_width = res["x_band_width"]
     h_band_width = res["h_band_width"]
     #  enc_slf_attn_lst = res["enc_slf_attn_lst"]
@@ -141,7 +153,7 @@ def am_synthesis(symbol_seq, fsnet, ling_unit, device):
     )
 
 
-def am_infer(sentence, ckpt, output_dir, config=None):
+def am_infer(sentence, ckpt, output_dir, se_file=None, config=None):
     if not torch.cuda.is_available():
         device = torch.device("cpu")
     else:
@@ -161,6 +173,9 @@ def am_infer(sentence, ckpt, output_dir, config=None):
     ling_unit = KanTtsLinguisticUnit(config)
     ling_unit_size = ling_unit.get_unit_size()
     config["Model"]["KanTtsSAMBERT"]["params"].update(ling_unit_size)
+
+    se_enable = config["Model"]["KanTtsSAMBERT"]["params"].get("SE", False) 
+    se = np.load(se_file) if se_enable else None
 
     # nsf
     nsf_enable = config["Model"]["KanTtsSAMBERT"]["params"].get("NSF", False) 
@@ -217,7 +232,8 @@ if __name__ == "__main__":
     parser.add_argument("--sentence", type=str, required=True)
     parser.add_argument("--output_dir", type=str, required=True)
     parser.add_argument("--ckpt", type=str, required=True)
+    parser.add_argument("--se_file", type=str, required=False)
 
     args = parser.parse_args()
 
-    am_infer(args.sentence, args.ckpt, args.output_dir)
+    am_infer(args.sentence, args.ckpt, args.output_dir, args.se_file)

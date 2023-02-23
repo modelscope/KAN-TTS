@@ -82,6 +82,15 @@ def train(
         config["rank"] = torch.distributed.get_rank()
         config["distributed"] = True
 
+    se_enable = config["Model"]["KanTtsSAMBERT"]["params"].get("SE", False)
+    
+    if se_enable:
+        valid_enable = False 
+        valid_split_ratio = 0.00
+    else:
+        valid_enable = True
+        valid_split_ratio = 0.02
+    
     fp_enable = config["Model"]["KanTtsSAMBERT"]["params"].get("FP", False)
     meta_file = [
         os.path.join(d, "raw_metafile.txt" if not fp_enable else "fprm_metafile.txt")
@@ -90,7 +99,7 @@ def train(
     #  TODO: abstract dataloader
     # Dataset prepare
     train_dataset, valid_dataset = get_am_datasets(
-        meta_file, root_dir, config, config["allow_cache"]
+        meta_file, root_dir, config, config["allow_cache"], split_ratio=1.0 - valid_split_ratio
     )
 
     logging.info(f"The number of training files = {len(train_dataset)}.")
@@ -110,7 +119,7 @@ def train(
             dataset=valid_dataset,
             num_replicas=world_size,
             shuffle=False,
-        )
+        )  if valid_enable else None
 
     train_dataloader = DataLoader(
         train_dataset,
@@ -130,7 +139,7 @@ def train(
         num_workers=config["num_workers"],
         sampler=sampler["valid"],
         pin_memory=config["pin_memory"],
-    )
+    )  if valid_enable else None
 
     ling_unit_size = train_dataset.ling_unit.get_unit_size()
 
