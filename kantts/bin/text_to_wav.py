@@ -77,6 +77,7 @@ def text_to_wav(
     am_ckpt,
     voc_ckpt,
     speaker=None,
+    se_file=None,
     lang="PinYin",
 ):
     os.makedirs(output_dir, exist_ok=True)
@@ -106,7 +107,7 @@ def text_to_wav(
             symbol_data.write(symbol)
 
     logging.info("AM is infering...")
-    am_infer(symbols_file, am_ckpt, output_dir)
+    am_infer(symbols_file, am_ckpt, output_dir, se_file)
 
     logging.info("Vocoder is infering...")
     hifigan_infer(os.path.join(output_dir, "feat"), voc_ckpt, output_dir)
@@ -139,6 +140,13 @@ if __name__ == "__main__":
         help="The speaker name, default is the first speaker",
     )
     parser.add_argument(
+        "--se_file",
+        type=str,
+        required=False,
+        default=None,
+        help="The speaker embedding file , default is None",
+    )
+    parser.add_argument(
         "--lang",
         type=str,
         default="PinYin",
@@ -164,5 +172,6 @@ if __name__ == "__main__":
         args.am_ckpt,
         args.voc_ckpt,
         args.speaker,
+        args.se_file,
         args.lang,
     )
