@@ -103,8 +103,12 @@ def process_data(
     se_model=None,
 ):
     foreignLang = "EnUS"
-    #  TODO: check if the vocie is supported
-    emo_tag_path = None
+
+    # check if the vocie is supported
+    if not os.path.exists(os.path.join(voice_input_dir, "emotion_tag.txt")):
+        emo_tag_path = None
+    else:
+        emo_tag_path = os.path.join(voice_input_dir, "emotion_tag.txt")
 
     phoneset_path = os.path.join(
         LANGUAGES_DIR, targetLang, languages[targetLang]["phoneset_path"]
@@ -214,7 +218,12 @@ if __name__ == "__main__":
     parser.add_argument("--audio_config", type=str, required=True)
     parser.add_argument("--speaker", type=str, default=None, help="speaker")
     parser.add_argument("--lang", type=str, default="PinYin", help="target language")
-    parser.add_argument("--se_model", type=str, default="../pre_data/speaker_embeddding/se.onnx", help="speaker embedding extractor model")
+    parser.add_argument(
+        "--se_model",
+        type=str,
+        default="../pre_data/speaker_embeddding/se.onnx",
+        help="speaker embedding extractor model",
+    )
     parser.add_argument(
         "--skip_script", action="store_true", help="skip script converting"
     )
