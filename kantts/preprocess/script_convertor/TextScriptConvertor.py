@@ -58,12 +58,38 @@ class TextScriptConvertor:
         self.LoadF2TMap(f2t_map_path)
         self.LoadS2PMap(s2p_map_path)
 
+        if m_emo_tag_path is not None:
+            self.m_emo_dict = self.parse_emo_tag(m_emo_tag_path)
+        else:
+            self.m_emo_dict = {}
+
         self.m_target_lang_syllable_formatter = self.InitSyllableFormatter(
             self.m_target_lang
         )
         self.m_foreign_lang_syllable_formatter = self.InitSyllableFormatter(
             self.m_foreign_lang
         )
+
+    def parse_emo_tag(self, emo_tag_path):
+        with open(emo_tag_path, "r") as f:
+            lines = f.readlines()
+            emo_tag = {}
+            for line in lines:
+                line = line.strip()
+                elements = line.split()
+                if len(elements) != 2:
+                    logging.error(
+                        "TextScriptConvertor.parse_emo_tag: invalid line: %s", line
+                    )
+                    continue
+                key = elements[0]
+                value = elements[1]
+                if key in emo_tag:
+                    logging.warning(
+                        "TextScriptConvertor.parse_emo_tag: duplicate key: %s", key
+                    )
+                emo_tag[key] = value
+        return emo_tag
 
     def parse_sentence(self, sentence, line_num):
         script_item = ScriptItem(self.m_phoneset, self.m_posset)
@@ -469,13 +495,12 @@ class TextScriptConvertor:
         logging.info("TextScriptConvertor.process:\nSave script to: %s", outputXMLPath)
 
         meta_lines = script.SaveMetafile()
-        #  TODO: parse emo tag file
-        emo = "emotion_neutral"
         speaker = self.m_speaker
 
         meta_lines_tagged = []
         for line in meta_lines:
             line_id, line_text = line.split("\t")
+            emo = self.m_emo_dict.get(line_id, "emotion_neutral")
             syll_items = line_text.split(" ")
             syll_items_tagged = []
             for syll_item in syll_items:
