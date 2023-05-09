@@ -1,18 +1,12 @@
-import os
-import numpy as np
-from numpy import dot
-from numpy.linalg import norm
-import librosa
-import argparse
-import onnxruntime
 import torch
-from glob import glob
-from .core.feature import (
-    compute_mfcc_feats,
-    apply_cmvn_sliding,
-)
-from .core.ivector import compute_vad
+import torchaudio
+import numpy as np
+import os
+import torchaudio.compliance.kaldi as Kaldi
+from .D_TDNN import DTDNN
 import logging
+import argparse
+from glob import glob
 
 
 logging.basicConfig(
@@ -20,35 +14,6 @@ logging.basicConfig(
     datefmt="%Y-%m-%d:%H:%M:%S",
     level=logging.DEBUG,
 )
-
-def extract_features(wav):
-    data = (wav * 32768).astype(np.int16)    
-    raw_mfcc = compute_mfcc_feats(data, dither=0.0, energy_floor=0.1, sample_frequency=16000, frame_length=25, frame_shift=10, low_freq=20, high_freq=-400, num_mel_bins=30, num_ceps=30, snip_edges=False)
-    log_energy = raw_mfcc[:, 0]
-    vad = compute_vad(log_energy, energy_threshold=5.5, energy_mean_scale=0.5, frames_context=2, proportion_threshold=0.12)
-    mfcc = apply_cmvn_sliding(raw_mfcc, window=300, center=True)#[vad]
-    return(np.float32(mfcc))
-
-def extract_se(sess, inputs_mfcc):
-    feat = inputs_mfcc.T 
-    feat = torch.from_numpy(feat)
-    feat = torch.unsqueeze(feat, 0)  
-    outputs = sess.run(
-        ['output'], 
-        {'input': feat.data.cpu().numpy()}
-    )
-    speaker_embedding = outputs[0]
-    return speaker_embedding
-
-def read_scp(wav2sv):
-    wavlst = []
-    svlst = []
-    f = open(wav2sv)
-    for line in f.readlines():
-        line = line.strip().split(' ')
-        wavlst.append(line[0])
-        svlst.append(line[1])
-    return(wavlst, svlst)
 
 class SpeakerEmbeddingProcessor:
     def __init__(self, sample_rate=16000):
@@ -62,9 +27,11 @@ class SpeakerEmbeddingProcessor:
     def process(self, src_voice_dir, se_onnx):
         logging.info("[SpeakerEmbeddingProcessor] Speaker embedding extractor started")
 
-        opts = onnxruntime.SessionOptions()
-        opts.intra_op_num_threads = 1
-        sess = onnxruntime.InferenceSession(se_onnx, sess_options=opts)
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        model = DTDNN()
+        model.load_state_dict(torch.load(se_onnx, map_location=device))
+        model.eval()
+        model.to(device)
 
         wav_dir = os.path.join(src_voice_dir, "wav")
         se_dir = os.path.join(src_voice_dir, "se")
@@ -74,23 +41,28 @@ class SpeakerEmbeddingProcessor:
 
         wav_files = glob(os.path.join(wav_dir, '*.wav'))
 
+
         for wav_file in wav_files:
             basename = os.path.splitext(os.path.basename(wav_file))[0]
             se_file = os.path.join(se_dir, basename + '.npy')
              
-            wav, _ = librosa.load(wav_file, sr=self.sample_rate)
-            if len(wav) < self.min_wav_length:
+            wav, fs = torchaudio.load(wav_file)
+            assert wav.shape[0] == 1
+            assert fs == 16000
+
+            if wav.shape[1] < self.min_wav_length:
                 continue
 
-            feat = extract_features(wav)
-            feat = feat.T 
-            feat = torch.from_numpy(feat)
-            feat = torch.unsqueeze(feat, 0)  
-            outputs = sess.run(
-                ['output'], 
-                {'input': feat.data.cpu().numpy()}
-            )
-            speaker_embedding = outputs[0]
+            fbank_feat = Kaldi.fbank(wav, num_mel_bins=80)
+            
+            feat = fbank_feat - fbank_feat.mean(dim=0, keepdim=True)
+            feat = feat.unsqueeze(0).to(device)
+            
+            speaker_embedding = model(feat)
+            speaker_embedding = speaker_embedding.squeeze().cpu().detach().numpy()
+            speaker_embedding = np.expand_dims(speaker_embedding,  axis=0)
+            
+            
             np.save(se_file, speaker_embedding)
             self.se_list.append(speaker_embedding)
         self.se_average = np.expand_dims(
