@@ -24,12 +24,21 @@ class SpeakerEmbeddingProcessor:
         self.mfcc_dict = {}
         self.se_list = []
 
-    def process(self, src_voice_dir, se_onnx):
+    def process(self, src_voice_dir, se_model):
         logging.info("[SpeakerEmbeddingProcessor] Speaker embedding extractor started")
 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         model = DTDNN()
-        model.load_state_dict(torch.load(se_onnx, map_location=device))
+        try:
+            if os.path.basename(se_model) == "se.model":
+                model.load_state_dict(torch.load(se_model, map_location=device))
+            else:
+                raise Exception("[SpeakerEmbeddingProcessor] se model loading error!!!")
+        except Exception as e:
+            logging.info(e)
+            if os.path.basename(se_model) == 'se.onnx':
+                logging.info("[SpeakerEmbeddingProcessor] please update your se model to ensure that the version is greater than or equal to 1.0.5")
+            sys.exit()
         model.eval()
         model.to(device)
 
@@ -80,7 +89,7 @@ class SpeakerEmbeddingProcessor:
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Speaker Embedding Processor")
     parser.add_argument("--src_voice_dir", type=str, required=True)    
-    parser.add_argument('--se_onnx', required=True)
+    parser.add_argument('--se_model', required=True)
     args = parser.parse_args()
 
     sep = SpeakerEmbeddingProcessor()
