@@ -17,7 +17,7 @@ Model:
         encoder_relu_dropout: 0.1
         encoder_projection_units: 32
 
-        speaker_units: 512
+        speaker_units: 192
         emotion_units: 32
 
         predictor_filter_size: 41

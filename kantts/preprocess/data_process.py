@@ -202,7 +202,7 @@ def process_data(
             voice_output_dir,
             se_model,
         )
-    logging.info("Processing speaker embedding done.")
+        logging.info("Processing speaker embedding done.")
 
     logging.info("Processing done.")
 
@@ -221,7 +221,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--se_model",
         type=str,
-        default="../pre_data/speaker_embeddding/se.onnx",
+        default="../pre_data/speaker_embeddding/se.*",
         help="speaker embedding extractor model",
     )
     parser.add_argument(
