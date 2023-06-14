@@ -13,7 +13,7 @@ NgBreakPattern = r"^ng(?P<break>\d)"
 
 RegexWord = re.compile(WordPattern + r"\s*")
 RegexBreak = re.compile(BreakPattern + r"\s*")
-RegexID = re.compile(r"^(.*?)\s")
+RegexID = re.compile(r"^(?P<ID>.*?)\s")
 RegexSentence = re.compile(
     r"({}|{}|{}|{}|{})\s*".format(
         WordPattern, BreakPattern, MarkPattern, POSPattern, PhraseTonePattern
