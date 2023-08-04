@@ -336,7 +336,7 @@ def get_voc_datasets(
     )
 
     valid_dataset = Voc_Dataset(
-        valid_meta_lst,
+        valid_meta_lst[:50],
         root_dir,
         config,
     )
@@ -865,7 +865,7 @@ def get_am_datasets(
 
     train_dataset = AM_Dataset(config, train_meta_lst, root_dir, allow_cache)
 
-    valid_dataset = AM_Dataset(config, valid_meta_lst, root_dir, allow_cache)
+    valid_dataset = AM_Dataset(config, valid_meta_lst[:50], root_dir, allow_cache)
 
     return train_dataset, valid_dataset
 

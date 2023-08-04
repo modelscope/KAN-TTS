@@ -56,6 +56,11 @@ def train(
     if not isinstance(root_dir, list):
         root_dir = [root_dir]
 
+    if len(root_dir) == 1 and os.path.isfile(root_dir[0]):
+        with open(root_dir[0], "r") as f:
+            dir_lines = f.readlines()
+        root_dir = [line.strip() for line in dir_lines]
+
     if local_rank == 0 and not os.path.exists(stage_dir):
         os.makedirs(stage_dir)
 

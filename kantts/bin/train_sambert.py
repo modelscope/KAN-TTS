@@ -56,6 +56,11 @@ def train(
     if not isinstance(root_dir, list):
         root_dir = [root_dir]
 
+    if len(root_dir) == 1 and os.path.isfile(root_dir[0]):
+        with open(root_dir[0], "r") as f:
+            dir_lines = f.readlines()
+        root_dir = [line.strip() for line in dir_lines]
+
     if local_rank == 0 and not os.path.exists(stage_dir):
         os.makedirs(stage_dir)
 
@@ -83,14 +88,14 @@ def train(
         config["distributed"] = True
 
     se_enable = config["Model"]["KanTtsSAMBERT"]["params"].get("SE", False)
-    
+
     if se_enable:
-        valid_enable = False 
+        valid_enable = False
         valid_split_ratio = 0.00
     else:
         valid_enable = True
         valid_split_ratio = 0.02
-    
+
     fp_enable = config["Model"]["KanTtsSAMBERT"]["params"].get("FP", False)
     meta_file = [
         os.path.join(d, "raw_metafile.txt" if not fp_enable else "fprm_metafile.txt")
@@ -99,7 +104,11 @@ def train(
     #  TODO: abstract dataloader
     # Dataset prepare
     train_dataset, valid_dataset = get_am_datasets(
-        meta_file, root_dir, config, config["allow_cache"], split_ratio=1.0 - valid_split_ratio
+        meta_file,
+        root_dir,
+        config,
+        config["allow_cache"],
+        split_ratio=1.0 - valid_split_ratio,
     )
 
     logging.info(f"The number of training files = {len(train_dataset)}.")
@@ -115,11 +124,15 @@ def train(
             num_replicas=world_size,
             shuffle=True,
         )
-        sampler["valid"] = DistributedSampler(
-            dataset=valid_dataset,
-            num_replicas=world_size,
-            shuffle=False,
-        )  if valid_enable else None
+        sampler["valid"] = (
+            DistributedSampler(
+                dataset=valid_dataset,
+                num_replicas=world_size,
+                shuffle=False,
+            )
+            if valid_enable
+            else None
+        )
 
     train_dataloader = DataLoader(
         train_dataset,
@@ -131,15 +144,19 @@ def train(
         pin_memory=config["pin_memory"],
     )
 
-    valid_dataloader = DataLoader(
-        valid_dataset,
-        shuffle=False if distributed else True,
-        collate_fn=valid_dataset.collate_fn,
-        batch_size=config["batch_size"],
-        num_workers=config["num_workers"],
-        sampler=sampler["valid"],
-        pin_memory=config["pin_memory"],
-    )  if valid_enable else None
+    valid_dataloader = (
+        DataLoader(
+            valid_dataset,
+            shuffle=False if distributed else True,
+            collate_fn=valid_dataset.collate_fn,
+            batch_size=config["batch_size"],
+            num_workers=config["num_workers"],
+            sampler=sampler["valid"],
+            pin_memory=config["pin_memory"],
+        )
+        if valid_enable
+        else None
+    )
 
     ling_unit_size = train_dataset.ling_unit.get_unit_size()
 
