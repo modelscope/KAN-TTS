@@ -1,6 +1,7 @@
 """
 FSMN Pytorch Version
 """
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -71,6 +72,27 @@ class MemoryBlockV2(nn.Module):
 
         return output
 
+    def chunk_forward(self, input, mask=None, left_cache=None, rp=None):
+        if mask is not None:
+            input = input.masked_fill(mask.unsqueeze(-1), 0)
+        # padding
+        if left_cache is None:
+            x = F.pad(input, (0, 0, self.lp, 0, 0, 0), mode="constant", value=0.0)
+        else:
+            x = torch.cat([left_cache, input], dim=1)
+        # 更新 cache
+        if rp is not None:
+            new_left_cache = x[:, -rp - self.lp : x.size(1) - rp]  # self.lp
+        x = F.pad(x, (0, 0, 0, self.rp, 0, 0), mode="constant", value=0.0)
+        output = (
+            self.conv_dw(x.contiguous().transpose(1, 2)).contiguous().transpose(1, 2)
+        )
+        output += input[:, : output.size(1)]
+        output = self.dropout(output)
+        if mask is not None:
+            output = output.masked_fill(mask.unsqueeze(-1), 0)
+        return output, new_left_cache
+
 
 class FsmnEncoderV2(nn.Module):
     def __init__(
@@ -122,3 +144,20 @@ class FsmnEncoderV2(nn.Module):
             x = memory
 
         return x
+
+    def chunk_forward(self, input, mask=None, left_caches=None, right_pad_size=None):
+        x = F.dropout(input, self.dropout, self.training)
+        new_left_caches = []
+        for ffn, memory_block, left_cache in zip(
+            self.ffn_lst, self.memory_block_lst, left_caches
+        ):
+            context = ffn(x)
+            memory, left_cache = memory_block.chunk_forward(
+                context, mask, left_cache, right_pad_size
+            )
+            new_left_caches.append(left_cache)
+            memory = F.dropout(memory, self.dropout, self.training)
+            if memory.size(-1) == x.size(-1):
+                memory += x
+            x = memory
+        return x, new_left_caches
