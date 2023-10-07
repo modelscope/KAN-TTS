@@ -611,6 +611,36 @@ class MelPNCADecoder(nn.Module):
 
         return dec_output, dec_pnca_attn_x_list, dec_pnca_attn_h_list
 
+    def chunk_forward(
+        self,
+        memory,
+        x_band_width,
+        h_band_width,
+        mask=None,
+        return_attns=False,
+    ):
+        # stream module is only use for inference
+        batch_size = memory.size(0)
+        go_frame = torch.zeros((batch_size, 1, self.d_mel)).to(memory.device)
+        self.mel_dec.reset_state()
+        input = go_frame
+        for step in range(memory.size(1)):
+            (
+                dec_output_step,
+                dec_pnca_attn_x_step,
+                dec_pnca_attn_h_step,
+            ) = self.mel_dec.infer(
+                step,
+                input,
+                memory,
+                x_band_width,
+                h_band_width,
+                mask=mask,
+                return_attns=return_attns,
+            )
+            input = dec_output_step[:, :, -self.d_mel :]
+            yield dec_output_step, dec_pnca_attn_x_step, dec_pnca_attn_h_step
+
 
 class PostNet(nn.Module):
     def __init__(self, config):
@@ -716,7 +746,9 @@ class KanTtsSAMBERT(nn.Module):
         self.text_encoder = TextFftEncoder(config)
         self.se_enable = config.get("SE", False)
         if not self.se_enable:
-            self.spk_tokenizer = nn.Embedding(config["speaker"], config["speaker_units"])
+            self.spk_tokenizer = nn.Embedding(
+                config["speaker"], config["speaker_units"]
+            )
         self.emo_tokenizer = nn.Embedding(config["emotion"], config["emotion_units"])
         self.variance_adaptor = VarianceAdaptor(config)
         self.mel_decoder = MelPNCADecoder(config)
@@ -859,7 +891,7 @@ class KanTtsSAMBERT(nn.Module):
                         )
         return text_hid, inputs_emotion, inputs_speaker, inter_lengths
 
-    def forward(
+    def pre_forward(
         self,
         inputs_ling,
         inputs_emotion,
@@ -874,7 +906,6 @@ class KanTtsSAMBERT(nn.Module):
         fp_label=None,
     ):
         batch_size = inputs_ling.size(0)
-
         is_training = mel_targets is not None
         input_masks = get_mask_from_lengths(input_lengths, max_len=inputs_ling.size(1))
 
@@ -925,7 +956,9 @@ class KanTtsSAMBERT(nn.Module):
                 duration_targets[i, input_lengths[i]] = padding
 
         emo_hid = self.emo_tokenizer(inputs_emotion)
-        spk_hid = inputs_speaker if self.se_enable else self.spk_tokenizer(inputs_speaker)
+        spk_hid = (
+            inputs_speaker if self.se_enable else self.spk_tokenizer(inputs_speaker)
+        )
 
         inter_masks = get_mask_from_lengths(inter_lengths, max_len=text_hid.size(1))
 
@@ -991,6 +1024,59 @@ class KanTtsSAMBERT(nn.Module):
                 + 0.5
             )
             h_band_width = x_band_width
+        res = {
+            "x_band_width": x_band_width,
+            "h_band_width": h_band_width,
+            "enc_slf_attn_lst": enc_sla_attn_lst,
+            "LR_length_rounded": LR_length_rounded,
+            "log_duration_predictions": log_duration_predictions,
+            "pitch_predictions": pitch_predictions,
+            "energy_predictions": energy_predictions,
+            "duration_targets": duration_targets,
+            "pitch_targets": pitch_targets,
+            "energy_targets": energy_targets,
+            "fp_predictions": FP_p,
+            "valid_inter_lengths": inter_lengths,
+            "LR_text_outputs": LR_text_outputs,
+            "LR_emo_outputs": LR_emo_outputs,
+            "LR_spk_outputs": LR_spk_outputs,
+        }
+        if self.MAS and is_training:
+            res["attn_soft"] = attn_soft
+            res["attn_hard"] = attn_hard
+            res["attn_logprob"] = attn_logprob
+        return memory, lfr_masks, output_masks, res
+
+    def forward(
+        self,
+        inputs_ling,
+        inputs_emotion,
+        inputs_speaker,
+        input_lengths,
+        output_lengths=None,
+        mel_targets=None,
+        duration_targets=None,
+        pitch_targets=None,
+        energy_targets=None,
+        attn_priors=None,
+        fp_label=None,
+    ):
+        batch_size = inputs_ling.size(0)
+        memory, lfr_masks, output_masks, res = self.pre_forward(
+            inputs_ling,
+            inputs_emotion,
+            inputs_speaker,
+            input_lengths,
+            output_lengths=output_lengths,
+            mel_targets=mel_targets,
+            duration_targets=duration_targets,
+            pitch_targets=pitch_targets,
+            energy_targets=energy_targets,
+            attn_priors=attn_priors,
+            fp_label=fp_label,
+        )
+        x_band_width = res["x_band_width"]
+        h_band_width = res["h_band_width"]
 
         dec_outputs, pnca_x_attn_lst, pnca_h_attn_lst = self.mel_decoder(
             memory,
@@ -1013,35 +1099,132 @@ class KanTtsSAMBERT(nn.Module):
         if output_masks is not None:
             postnet_outputs = postnet_outputs.masked_fill(output_masks.unsqueeze(-1), 0)
 
-        res = {
-            "x_band_width": x_band_width,
-            "h_band_width": h_band_width,
-            "enc_slf_attn_lst": enc_sla_attn_lst,
-            "pnca_x_attn_lst": pnca_x_attn_lst,
-            "pnca_h_attn_lst": pnca_h_attn_lst,
-            "dec_outputs": dec_outputs,
-            "postnet_outputs": postnet_outputs,
-            "LR_length_rounded": LR_length_rounded,
-            "log_duration_predictions": log_duration_predictions,
-            "pitch_predictions": pitch_predictions,
-            "energy_predictions": energy_predictions,
-            "duration_targets": duration_targets,
-            "pitch_targets": pitch_targets,
-            "energy_targets": energy_targets,
-            "fp_predictions": FP_p,
-            "valid_inter_lengths": inter_lengths,
-        }
-
-        res["LR_text_outputs"] = LR_text_outputs
-        res["LR_emo_outputs"] = LR_emo_outputs
-        res["LR_spk_outputs"] = LR_spk_outputs
-
-        if self.MAS and is_training:
-            res["attn_soft"] = attn_soft
-            res["attn_hard"] = attn_hard
-            res["attn_logprob"] = attn_logprob
-
+        res["pnca_x_attn_lst"] = pnca_x_attn_lst
+        res["pnca_h_attn_lst"] = pnca_h_attn_lst
+        res["dec_outputs"] = dec_outputs
+        res["postnet_outputs"] = postnet_outputs
         return res
+
+    # Use only for inference
+    def chunk_forward(
+        self,
+        inputs_ling,
+        inputs_emotion,
+        inputs_speaker,
+        input_lengths,
+        output_lengths=None,
+        attn_priors=None,
+        fp_label=None,
+        mel_chunk_size=48,
+    ):
+        batch_size = inputs_ling.size(0)
+        memory, lfr_masks, output_masks, res = self.pre_forward(
+            inputs_ling,
+            inputs_emotion,
+            inputs_speaker,
+            input_lengths,
+            output_lengths=output_lengths,
+            attn_priors=attn_priors,
+            fp_label=fp_label,
+        )
+        x_band_width = res["x_band_width"]
+        h_band_width = res["h_band_width"]
+
+        # mel_decoder
+        complete_length = 0
+        dec_outputs = torch.empty(
+            batch_size,
+            0,
+            self.mel_decoder.d_mel,
+            dtype=memory.dtype,
+            device=memory.device,
+        )
+        total_length = memory.size(1) * 3
+
+        # initialize cache
+        h0 = torch.zeros(
+            [batch_size, 1, self.mel_postnet.lstm_units], device=memory.device
+        )
+        c0 = torch.zeros(
+            [batch_size, 1, self.mel_postnet.lstm_units], device=memory.device
+        )
+        left_memory_caches = [
+            None for _ in range(len(self.mel_postnet.fsmn.memory_block_lst))
+        ]
+
+        # size of right side receptive filed: 12
+        receptive_field_size = self.mel_postnet.fsmn.memory_block_lst[0].rp * len(
+            self.mel_postnet.fsmn.memory_block_lst
+        )
+        for (
+            dec_output_step,
+            dec_pnca_attn_x_step,
+            dec_pnca_attn_h_step,
+        ) in self.mel_decoder.chunk_forward(
+            memory, x_band_width, h_band_width, mask=lfr_masks, return_attns=True
+        ):
+            dec_output_step = dec_output_step.contiguous().view(
+                batch_size, -1, self.mel_decoder.d_mel
+            )
+            if output_masks is not None:
+                dec_output_step = dec_output_step.masked_fill(
+                    output_masks.unsqueeze(-1)[
+                        :,
+                        dec_outputs.size(1) : dec_outputs.size(1)
+                        + dec_output_step.size(1),
+                        :,
+                    ],
+                    0,  # NOQA
+                )
+            dec_outputs = torch.concat([dec_outputs, dec_output_step], dim=1)
+            # mel postnet
+            target_length = complete_length + mel_chunk_size + receptive_field_size
+            if (
+                dec_outputs.size(1) >= target_length
+                or dec_outputs.size(1) == total_length
+            ):
+
+                # Cache
+                dec_output_chunk = dec_outputs[:, complete_length:target_length]
+                (
+                    postnet_fsmn_output,
+                    left_memory_caches,
+                ) = self.mel_postnet.fsmn.chunk_forward(
+                    dec_output_chunk,
+                    output_masks[:, complete_length:target_length],
+                    left_memory_caches,
+                    max(0, dec_output_chunk.size(1) - mel_chunk_size),
+                )
+                postnet_fsmn_output = postnet_fsmn_output[:, :mel_chunk_size]
+                postnet_lstm_output, (h0, c0) = self.mel_postnet.lstm(
+                    postnet_fsmn_output, (h0, c0)
+                )
+                mel_residual_output = self.mel_postnet.fc(postnet_lstm_output)
+                mel_residual_output = (
+                    mel_residual_output
+                    + dec_outputs[:, complete_length : complete_length + mel_chunk_size]
+                )
+                if output_masks is not None:
+                    postnet_output = mel_residual_output.masked_fill(
+                        output_masks[
+                            :, complete_length : complete_length + mel_chunk_size
+                        ].unsqueeze(-1),
+                        0,
+                    )
+                res["postnet_output_chunk"] = postnet_output
+                res["dec_output_chunk"] = dec_outputs[
+                    :, complete_length : complete_length + mel_chunk_size
+                ]
+                """ TODO
+                res["pnca_x_attn_lst"] = pnca_x_attn_lst
+                res["pnca_h_attn_lst"] = pnca_h_attn_lst
+                """
+                yield res
+                complete_length += postnet_output.size(1)
+                # Only the first chunk returns additional information
+                # and subsequent packets only return `postnet_output_chunk` and `dec_output_chunk`
+                # to avoid redundant information transmission.
+                res = dict()
 
 
 class KanTtsTextsyBERT(nn.Module):
